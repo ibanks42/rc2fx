@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/app/model"

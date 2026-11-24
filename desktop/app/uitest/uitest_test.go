@@ -1,7 +1,7 @@
 package main
 
 // Runs offscreen UI tests via `go test ./app/uitest` from desktop/.
-// Requires RC2FX_GPUIKIT_DIAG pointing to a diagnostic build of libgpuikit
+// Requires RC2FX_GOUIKIT_DIAG pointing to a diagnostic build of libgouikit
 // (built via `make lib` in the bindings repo); skipped otherwise.
 // Set RC2FX_UITEST_SHOTS to keep rendered screenshots instead of using a temp dir.
 
@@ -14,12 +14,12 @@ import (
 )
 
 func TestOffscreenModes(t *testing.T) {
-	diag := os.Getenv("RC2FX_GPUIKIT_DIAG")
+	diag := os.Getenv("RC2FX_GOUIKIT_DIAG")
 	if diag == "" {
-		t.Skip("RC2FX_GPUIKIT_DIAG is not set (the diag library's lib folder)")
+		t.Skip("RC2FX_GOUIKIT_DIAG is not set (the diag library's lib folder)")
 	}
 	bin := filepath.Join(t.TempDir(), "uitest")
-	build := exec.Command("go", "build", "-tags", "mockmixer", "-o", bin, ".")
+	build := exec.Command("go", "build", "-tags", "mockmixer,gkstatic", "-o", bin, ".")
 	build.Env = append(os.Environ(), "CGO_LDFLAGS=-L"+diag)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
 )
 
 // openDevPage navigates once to the page requested via RC2FX_DEV_PAGE.

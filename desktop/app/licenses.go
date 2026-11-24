@@ -5,8 +5,11 @@ package app
 import (
 	"fmt"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
@@ -15,19 +18,19 @@ type licensesView struct {
 	expanded map[int]bool
 	// Lazily parsed on first expand (in click handlers, since render can't allocate
 	// kit state) so collapsing/reopening preserves scroll and selection.
-	textViews map[int]gk.TextViewState
+	textViews map[int]editor.TextViewState
 	view      gk.View
 	theme     gk.BaseTheme
 }
 
 var licensesDialog struct {
 	made  bool
-	built gk.Built[gk.DialogEl]
+	built gk.Built[overlay.DialogEl]
 	view  *licensesView
 }
 
 func newLicensesView(cx *gk.Cx) *licensesView {
-	l := &licensesView{expanded: map[int]bool{}, textViews: map[int]gk.TextViewState{}, theme: gk.NewBaseThemeGlobal(cx)}
+	l := &licensesView{expanded: map[int]bool{}, textViews: map[int]editor.TextViewState{}, theme: gk.NewBaseThemeGlobal(cx)}
 	l.view = gk.NewView(nil, l.render)
 	return l
 }
@@ -50,7 +53,7 @@ func (l *licensesView) open(cx *gk.Cx, index int) {
 	l.expanded[index] = true
 	if _, ok := l.textViews[index]; !ok {
 		markdown := licenses.NoticeMarkdown(licenses.Sections()[index].Text)
-		l.textViews[index] = gk.NewTextViewStateMarkdown(cx, markdown).Build()
+		l.textViews[index] = editor.NewTextViewStateMarkdown(cx, markdown).Build()
 	}
 }
 
@@ -72,7 +75,7 @@ func (l *licensesView) render(cx *gk.Cx) gk.Element {
 		}
 		item := gk.VFlex(s.BorderB1).BorderColor(rgb(surface().Line)).
 			// Use a button so section headers are keyboard-focusable.
-			Child(gk.Button(gk.Key("license-section", index)).Ghost().Style(s.WFull, s.JustifyStart).
+			Child(kit.Button(gk.Key("license-section", index)).Ghost().Style(s.WFull, s.JustifyStart).
 				Label(fmt.Sprintf("%s %s", arrow, section.Title)).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { l.toggle(cx, index) }))
 		if state, ok := l.textViews[index]; open && ok {
@@ -83,11 +86,11 @@ func (l *licensesView) render(cx *gk.Cx) gk.Element {
 	return list
 }
 
-func noticeBox(state gk.TextViewState, theme gk.BaseTheme) gk.DivEl {
-	style := gk.NewBaseTextViewStyleFromTheme(theme).WithForeground(rgb(Muted)).WithParagraphGap(0)
+func noticeBox(state editor.TextViewState, theme gk.BaseTheme) gk.DivEl {
+	style := editor.NewBaseTextViewStyleFromTheme(theme).WithForeground(rgb(Muted)).WithParagraphGap(0)
 	return gk.Div(s.FlexShrink0, s.My2, s.Border1).H(px(320)).P(px(18)).Rounded(px(12)).
 		Bg(rgb(surface().Sunken)).BorderColor(rgb(surface().Line)).TextSize(px(13.5)).
-		Child(gk.BaseTextView(state).Style(style).Selectable(true).Scrollable(true).
+		Child(editor.BaseTextView(state).Style(style).Selectable(true).Scrollable(true).
 			OnLinkClick(func(*gk.Cx, gk.Event83) {}))
 }
 
@@ -96,16 +99,16 @@ func openLicenses(cx *gk.Cx) {
 	if !d.made {
 		d.view = newLicensesView(cx)
 		view := d.view.view
-		d.built = gk.NewBuilt(cx, func(cx *gk.Cx) gk.DialogEl {
+		d.built = gk.NewBuilt(cx, func(cx *gk.Cx) overlay.DialogEl {
 			return styledDialog(720).
 				Title(gk.Div(s.TextXl, s.FontSemibold).Child(txt("Licenses"))).
 				ChildView(view).
-				Footer(gk.DialogFooter(s.Pt5).Child(gk.DialogClose().Trigger(gk.Button("licenses-close").Ghost().Large().
+				Footer(overlay.DialogFooter(s.Pt5).Child(overlay.DialogClose().Trigger(kit.Button("licenses-close").Ghost().Large().
 					H(px(44)).Style(s.Px5).Rounded(float32(22)).Label("Close"))))
 		})
 		d.made = true
 	}
 	d.view.reset(cx)
 	gk.Notify(cx, d.view.view)
-	gk.OpenDialog(cx, d.built)
+	overlay.OpenDialog(cx, d.built)
 }

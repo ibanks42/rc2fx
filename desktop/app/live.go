@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -161,14 +162,14 @@ func (a *App) liveBar(target *core.Target) gk.Element {
 				}
 				run(cx)
 			}).
-			Tooltip(gk.NewKitTooltip(tip))
+			Tooltip(overlay.NewKitTooltip(tip))
 	}
 	status := gk.Div(s.Flex1, s.MinW0, s.Truncate).TextSize(px(12)).TextColor(rgb(Faint))
 	var statusEl gk.Element
 	if reason := a.live.SaveError(); reason != "" && (a.pending != nil || a.session.Dirty()) {
 		message := saveFailedMessage(reason)
 		statusEl = status.TextColor(rgb(Danger)).Child(txt(message)).ID("save-error").
-			Tooltip(gk.NewKitTooltip(message + " RC2FX tries again shortly."))
+			Tooltip(overlay.NewKitTooltip(message + " RC2FX tries again shortly."))
 	} else if since, changed := a.live.Changed(*target); changed {
 		statusEl = status.Child(txt("Changed " + ago(time.Since(since))))
 	} else if a.pending != nil || a.session.Dirty() {
@@ -186,7 +187,7 @@ func (a *App) liveBar(target *core.Target) gk.Element {
 			TextColor(rgb(Accent)).Hover(hover().Bg(white(0.06))).
 			Child(txt("Revert")).ID("revert-channel").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.revertChannel(cx) }).
-			Tooltip(gk.NewKitTooltip("Put this channel back as it was before this round of edits. Undo brings the edits back.")))
+			Tooltip(overlay.NewKitTooltip("Put this channel back as it was before this round of edits. Undo brings the edits back.")))
 	}
 	return bar
 }

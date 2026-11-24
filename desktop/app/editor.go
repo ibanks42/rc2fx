@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"math"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/base"
+	"github.com/ibanks42/goui-kit/gk/chart"
+	gkedit "github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -29,8 +33,8 @@ func (r Reported) edit() edit.Reported {
 type ParameterEditor struct {
 	parameter Parameter
 	label     string
-	input     gk.InputState
-	slider    gk.SliderState
+	input     gkedit.InputState
+	slider    base.SliderState
 	min, max  float64
 	log       bool
 	decimals  int
@@ -66,25 +70,25 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 		index := len(a.editors)
 		decimals := edit.Decimals(d.Step)
 		value := parameter.Get(a.target(), a.channel, a.band)
-		input := gk.NewInputState(cx).DefaultValue(edit.Format(value, decimals)).
+		input := gkedit.NewInputState(cx).DefaultValue(edit.Format(value, decimals)).
 			Min(d.Min).Max(d.Max).Step(d.Step).Build()
-		scale := gk.SliderScaleLinear
+		scale := base.SliderScaleLinear
 		if d.Log {
-			scale = gk.SliderScaleLogarithmic
+			scale = base.SliderScaleLogarithmic
 		}
-		slider := gk.NewSliderState(cx).Min(float32(d.Min)).Max(float32(d.Max)).Step(float32(d.Step)).
+		slider := base.NewSliderState(cx).Min(float32(d.Min)).Max(float32(d.Max)).Step(float32(d.Step)).
 			DefaultValue(float32(value)).Scale(scale).Build()
-		a.subscriptions = append(a.subscriptions, input.OnInputEvent(cx, func(cx *gk.Cx, e gk.InputEvent) {
+		a.subscriptions = append(a.subscriptions, input.OnInputEvent(cx, func(cx *gk.Cx, e gkedit.InputEvent) {
 			if a.editorEpoch != epoch {
 				gk.Quiet(cx)
 				return
 			}
 			switch e.(type) {
-			case gk.InputEventBlur, gk.InputEventPressEnter:
+			case gkedit.InputEventBlur, gkedit.InputEventPressEnter:
 				a.editingValue = nil
 				a.notify(cx)
 				return
-			case gk.InputEventChange:
+			case gkedit.InputEventChange:
 			default:
 				gk.Quiet(cx)
 				return
@@ -104,14 +108,14 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 			a.notifyBandPreview(cx, a.band)
 			a.notify(cx)
 		}))
-		a.subscriptions = append(a.subscriptions, slider.OnSliderEvent(cx, func(cx *gk.Cx, e gk.SliderEvent) {
-			change, ok := e.(gk.SliderEventChange)
+		a.subscriptions = append(a.subscriptions, slider.OnSliderEvent(cx, func(cx *gk.Cx, e base.SliderEvent) {
+			change, ok := e.(base.SliderEventChange)
 			if a.editorEpoch != epoch || !ok || index >= len(a.editors) {
 				gk.Quiet(cx)
 				return
 			}
 			editor := a.editors[index]
-			value := float64(gk.SliderValueNumber(change.Value))
+			value := float64(kit.SliderValueNumber(change.Value))
 			editor.parameter.Set(a.target(), a.channel, a.band, value)
 			editor.input.SetValue(cx, edit.Format(value, editor.decimals))
 			a.notifyBandPreview(cx, a.band)
@@ -190,7 +194,7 @@ func (a *App) firstChannelHint() (gk.DivEl, bool) {
 	return gk.HFlex(s.ItemsCenter, s.Gap3, s.RoundedXl, s.Border1).MaxW(px(620)).Mb(px(22)).
 		Px(px(16)).Py(px(10)).Bg(rgb(surface().Panel)).BorderColor(rgb(surface().Line)).
 		Child(gk.Div(s.Flex1, s.MinW0, s.TextSm).TextColor(rgb(Text)).Child(txt(text))).
-		Child(gk.Button("first-channel-hint").Ghost().Small().Label(label).
+		Child(kit.Button("first-channel-hint").Ghost().Small().Label(label).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				a.firstHintTarget, a.firstHintDone = "", true
 				if !a.firstHintSaved {
@@ -331,7 +335,7 @@ func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 	if a.editingValue != nil && *a.editingValue == parameter {
 		valueView = gk.Div(s.Border1, s.FontSemibold).W(px(112)).Px(px(6)).Mx(px(-6)).Rounded(px(6)).
 			Bg(rgb(0x0b0e16)).BorderColor(rgb(Accent)).TextSize(px(15)).
-			Child(gk.Input(editor.input).Appearance(false).Style(s.Px0))
+			Child(gkedit.Input(editor.input).Appearance(false).Style(s.Px0))
 	} else {
 		color := Text
 		if off {
@@ -354,7 +358,7 @@ func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 			Child(valueView)).
 		Child(gk.Div(s.Relative, s.WFull).H(px(24)).
 			Child(sliderTrack(fraction, def, off)).
-			Child(gk.Slider(editor.slider).AccessibilityLabel(editor.label).Bg(gk.HSLA(0, 0, 0, 0)).
+			Child(kit.Slider(editor.slider).AccessibilityLabel(editor.label).Bg(gk.HSLA(0, 0, 0, 0)).
 				TextColor(rgb(thumb))).
 			// Intercept in capture phase since the underlying slider consumes mouse events.
 			CaptureAnyMouseUp(func(cx *gk.Cx, e gk.MouseEvent) {
@@ -505,7 +509,7 @@ func (a *App) stageFacts(effect core.Effect) (gk.DivEl, bool) {
 }
 
 // sliderTrack paints the custom track, gradient fill, and default-value tick
-// behind the transparent gk.Slider (24px tall, 4px bar at y=10, 12px tick at y=6).
+// behind the transparent kit.Slider (24px tall, 4px bar at y=10, 12px tick at y=6).
 func sliderTrack(fraction, def float32, off bool) gk.Element {
 	bar := func() gk.DivEl {
 		return gk.Div(s.Absolute, s.Left0).Top(px(10)).H(px(4)).Rounded(px(2))
@@ -534,7 +538,7 @@ func compressorCurve(compressor core.Compressor, inputPeak *float64) gk.Element 
 		}
 	}
 	line := func(from, to [2]float32, color uint32) gk.PlotPart {
-		return gk.NewPlotLine([][2]float32{from, to}, 1, rgb(color))
+		return chart.NewPlotLine([][2]float32{from, to}, 1, rgb(color))
 	}
 	parts := []gk.PlotPart{
 		line(at(-60, -60), at(0, -60), surface().Line),
@@ -549,14 +553,14 @@ func compressorCurve(compressor core.Compressor, inputPeak *float64) gk.Element 
 		db := -60 + float64(i)
 		curve = append(curve, at(db, edit.CompressorOut(compressor, db)))
 	}
-	parts = append(parts, gk.NewPlotLine(curve, 2.2, gradient()))
+	parts = append(parts, chart.NewPlotLine(curve, 2.2, gradient()))
 	if inputPeak != nil {
 		db := edit.LiveInputDB(*inputPeak)
 		p := at(db, edit.CompressorOut(compressor, db))
-		parts = append(parts, gk.NewPlotQuad(p[0]-5, p[1]-5, 10, 10, rgb(0xffffff), gk.QuadStyle{CornerRadius: 5}))
+		parts = append(parts, chart.NewPlotQuad(p[0]-5, p[1]-5, 10, 10, rgb(0xffffff), chart.QuadStyle{CornerRadius: 5}))
 	}
 	box := gk.Div(s.Relative).Size(px(size)).
-		Child(gk.Div(s.Absolute, s.Inset0).Child(gk.Plot(parts...)))
+		Child(gk.Div(s.Absolute, s.Inset0).Child(chart.Plot(parts...)))
 	label := func(text string) gk.DivEl {
 		return gk.Div(s.Absolute).TextSize(px(11)).TextColor(rgb(Faint)).Child(txt(text))
 	}

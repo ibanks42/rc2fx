@@ -3,8 +3,9 @@ package app
 import (
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 )
 
 const settingsColumn float32 = 760
@@ -36,8 +37,8 @@ func labeled(title, detail string) gk.DivEl {
 	return d
 }
 
-func ghost(id gk.ID, label string) gk.ButtonEl {
-	return gk.Button(id).Ghost().H(px(38)).Px(px(16)).Rounded(float32(19)).Style(s.Border1).
+func ghost(id gk.ID, label string) kit.ButtonEl {
+	return kit.Button(id).Ghost().H(px(38)).Px(px(16)).Rounded(float32(19)).Style(s.Border1).
 		BorderColor(rgb(surface().LineStrong)).Label(label)
 }
 
@@ -163,7 +164,7 @@ func (a *App) diagnosticsPage(cx *gk.Cx) gk.DivEl {
 		mono := gk.KitTheme(cx).MonoFontFamily(cx)
 		snapshot := a.telemetrySnapshot()
 		page = page.Child(telemetrySection(&snapshot, mono, a.telemetryAside(cx),
-			gk.Switch("telemetry-details").Small().Checked(a.telemetryDetails).Label("Technical details").
+			kit.Switch("telemetry-details").Small().Checked(a.telemetryDetails).Label("Technical details").
 				OnClick(func(cx *gk.Cx, on bool) {
 					a.telemetryDetails = on
 					a.notify(cx)

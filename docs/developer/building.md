@@ -39,21 +39,27 @@ Once those are installed, run the following from the repository root:
 
 ```sh
 just setup
-desktop/scripts/fetch-gpuikit.sh
 ```
 
 `just setup` installs the mixer's Rust target (`aarch64-unknown-linux-gnu`),
-installs `cargo-zigbuild`, verifies `zig` is on `PATH`, and activates the
-pre-commit hook in `.githooks`.
+installs `cargo-zigbuild`, verifies `zig` is on `PATH`, downloads the pinned
+goui-kit static library and Velopack's C library for your platform, and
+activates the pre-commit hook in `.githooks`. Running `just setup` again skips
+the goui-kit download if it is already current.
 
-`fetch-gpuikit.sh` downloads the pinned gpuikit static library (GPUI-kit with
-its Go bindings) for your platform, verifies its SHA-256, and unpacks it to
-`desktop/third_party/gpuikit` (gitignored). Because `lib/libgpuikit_static.a`
-is linked statically into the app, nothing ships alongside the executable. Set
-`GPUIKIT_TOKEN` to a GitHub token if the bindings repository is private to you.
-If you're working with a local build of the bindings, symlink it instead:
-`ln -sfn /path/to/gpuikit-VERSION-OS-ARCH desktop/third_party/gpuikit`. Only
-the UI packages need gpuikit; tests for every other package run without it.
+For CI or fetching another platform's build, run
+`./xtask fetch-goui-kit TARGET` (for example
+`./xtask fetch-goui-kit darwin-universal`; omit `TARGET` for the current
+machine). It downloads the goui-kit static library (Go bindings for GPUI-kit)
+pinned in `config/goui-kit.json`, verifies its SHA-256, and unpacks it to
+`desktop/third_party/goui-kit` (gitignored). Building with `-tags gkstatic`
+selects `lib/libgouikit_static.a` so nothing ships alongside the executable;
+without it, package `gk` looks for the shared library at runtime. If you're
+working with a local build of goui-kit, symlink it instead:
+`ln -sfn /path/to/goui-kit-VERSION-OS-ARCH desktop/third_party/goui-kit`
+(re-running `just setup` or `./xtask fetch-goui-kit` replaces a symlink with
+the downloaded archive). Only the UI packages need goui-kit; tests for every
+other package run without it.
 
 ## 2. Build and test
 
@@ -68,14 +74,14 @@ signed mixer releases. It invokes `./xtask app`, which compiles a development
 build (using the `rc2fxdev` Go build tag, analogous to a Rust debug build) into
 `target/debug` and launches it.
 
-Every build of the app passes a linker flag to strip unused gpuikit component
+Every build of the app passes a linker flag to strip unused goui-kit component
 families (`-extldflags=-Wl,--gc-sections`, or `-Wl,-dead_strip` on macOS). On
 Windows this requires LLVM's linker, so release builds link with `-fuse-ld=lld`
 (requiring `ld.lld` on `PATH` alongside MinGW's gcc) and
 `-Xlink=-force:multipleres` so the application manifest embedded by package
 `gk` wins over MinGW's default one. `./xtask` sets these flags automatically; a
-raw `go build` still works without them, just with every component family
-linked in.
+raw `go build -tags gkstatic` still works without them, just with every
+component family linked in.
 
 `just test` and the `*-embedded` recipes run `just mixer-build` first, which
 cross-compiles the mixer runtime into `target/mixer` locally without touching a
@@ -133,7 +139,7 @@ On macOS, the app ships as a universal binary targeting macOS 13 (the oldest
 version supported by Go 1.27) and newer. `./xtask package` compiles `cmd/rc2fx`
 twice with cgo for `arm64` and `amd64` (passing `-arch` and
 `-mmacosx-version-min=13.0` via `CC`, `CGO_CFLAGS`, and `CGO_LDFLAGS`) against
-the universal gpuikit library and each architecture's static `velopack_libc`,
+the universal goui-kit library and each architecture's static `velopack_libc`,
 then merges them with `lipo -create` (overridable via `RC2FX_LIPO`). It then
 verifies in Go that both the app binary and vpk's `UpdateMac` contain exactly
 `arm64` and `x86_64` slices targeting no newer macOS than the bundle's
@@ -146,15 +152,16 @@ bundles the same `UpdateMac` either way, and the channel (`osx`) and feed names
 stay the same, so users on earlier Apple silicon-only builds update
 seamlessly.
 
-Packaging requires the gpuikit download, Velopack's C library, and
+Packaging requires the goui-kit download, Velopack's C library, and
 `cargo-about` (`cargo install --locked cargo-about`):
 
-- Run `desktop/scripts/fetch-velopack.sh` to download and verify Velopack's C
-  library into `desktop/third_party/velopack`. Packaged builds enable the
-  `velopack` build tag so self-updates work (and `embedded` as well when
-  `--embedded` is passed).
+- `just setup` downloads and verifies Velopack's C library into
+  `desktop/third_party/velopack` (you can also run
+  `./xtask fetch-velopack TARGET` in CI or to fetch another platform's
+  build). Packaged builds enable the `velopack` build tag so self-updates
+  work (and `embedded` as well when `--embedded` is passed).
 - `cargo-about` gathers licenses for the mixer's Rust crates, which are merged
-  with the Go module and gpuikit notices.
+  with the Go module and goui-kit notices.
 - Every platform needs .NET and `vpk` `1.3.39-g8d2844f`:
   `dotnet tool install -g vpk --version 1.3.39-g8d2844f`. Put `vpk` on `PATH`
   or point `RC2FX_VPK` at it. CI release builds install a checksummed copy via
@@ -165,10 +172,9 @@ Packaging requires the gpuikit download, Velopack's C library, and
   resources if `windres` is absent.
 - Because packages ship Velopack's launcher, updater, and installer, the app's
   license notices also pull in Velopack's dependencies from
-  `licenses/velopack-VERSION.json`. Whenever you bump vpk (keeping
-  `VPKVersion` in `desktop/internal/xtask/licenses/licenses.go`,
-  `.github/scripts/setup-vpk.sh`, and `version`/`sha` in
-  `desktop/scripts/fetch-velopack.sh` in sync), regenerate that report with
+  `licenses/velopack-VERSION.json`. Whenever you bump Velopack in
+  `config/velopack.json` (shared by `vpk`, `./xtask fetch-velopack`, and
+  packaging), regenerate that report with
   `.github/scripts/velopack-licenses.py VERSION`; packaging rejects mismatched
   reports.
 - Linux additionally requires `mksquashfs` (from `squashfs-tools`) on `PATH`,

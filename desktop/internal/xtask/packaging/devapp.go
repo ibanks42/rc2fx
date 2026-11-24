@@ -15,7 +15,7 @@ package packaging
 //	             (-tags embedded)
 //	--build-only build, do not run
 //
-// Arguments after `--` go to the app. The gpuikit static library is linked
+// Arguments after `--` go to the app. The goui-kit static library is linked
 // into the executable, so it runs on its own.
 
 import (
@@ -56,7 +56,7 @@ func RunApp(args []string) error {
 	root := task.Root()
 	desktop := filepath.Join(root, "desktop")
 	goos := runtime.GOOS
-	gpuikit, err := findGpuikit(root)
+	gouikit, err := findGouiKit(root)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,8 @@ func RunApp(args []string) error {
 	if embedded {
 		tags = append(tags, "embedded")
 	}
-	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, ldflags)
+	tags = append(tags, StaticTag)
+	ldflags, cgoLDFlags := appLinkFlags(goos, gouikit, ldflags)
 	if err := os.MkdirAll(out, 0o777); err != nil {
 		return task.Error(task.IOError(err))
 	}
@@ -127,7 +128,7 @@ func RunApp(args []string) error {
 		return err
 	}
 	// Builds before the static library put it beside the executable.
-	for _, old := range []string{"libgpuikit.so", "libgpuikit.dylib", "gpuikit.dll", "rc2fx.exe.manifest"} {
+	for _, old := range []string{"libgouikit.so", "libgouikit.dylib", "gouikit.dll", "rc2fx.exe.manifest"} {
 		_ = os.Remove(filepath.Join(out, old))
 	}
 	if goos == "windows" {
@@ -141,7 +142,7 @@ func RunApp(args []string) error {
 	return task.Run(exec.Command(exe, appArgs...))
 }
 
-// appLinkFlags extends ldflags and CGO_LDFLAGS with the gpuikit static library
+// appLinkFlags extends ldflags and CGO_LDFLAGS with the goui-kit static library
 // and dead-code stripping flags so the C linker only keeps component families
 // the app references (Go does not allow packages to request dead-stripping).
 func appLinkFlags(goos, libDir, ldflags string) (string, string) {

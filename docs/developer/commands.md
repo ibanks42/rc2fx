@@ -9,8 +9,8 @@ macOS. `just` wraps the most common ones. Run `just --list` for the recipes or
 
 | Command | Description |
 | --- | --- |
-| `just setup` | One-time setup: adds the mixer's Rust target, installs `cargo-zigbuild`, verifies `zig`, and enables a pre-commit hook that rejects unformatted Rust or Go code |
-| `just app` / `just desktop` | Run a development build / compile a release build of the desktop app using signed mixer downloads. No mixer cross-build needed. Both require gpuikit in `desktop/third_party/gpuikit` ([Building](building.md)). |
+| `just setup` | One-time setup: adds the mixer's Rust target, installs `cargo-zigbuild`, verifies `zig`, downloads the pinned goui-kit and Velopack libraries for your platform (skipping a goui-kit download that is already current), and enables a pre-commit hook that rejects unformatted Rust or Go code |
+| `just app` / `just desktop` | Run a development build / compile a release build of the desktop app using signed mixer downloads. No mixer cross-build needed. Both require goui-kit in `desktop/third_party/goui-kit` ([Building](building.md)). |
 | `just app-release` | Run the optimized release build as shipped. Slower to compile; handy for verifying changes before a release. |
 | `just app-mock` | Run the desktop app against an in-process simulated mixer with no hardware. See [below](#without-a-mixer). |
 | `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run a development build / compile a release build of the app with the optional embedded payload. |
@@ -59,7 +59,7 @@ tag, swapping USB 1 for an in-process simulated mixer. The UI, validation, and
 
 `just desktop-mock` compiles the same build without debug info into
 `target/mock/rc2fx`, ready to copy to another machine running the same OS.
-Because gpuikit is statically linked, no extra files are needed alongside it.
+Because goui-kit is statically linked, no extra files are needed alongside it.
 
 `./xtask app` rejects combining `--mock` with `--release`, and packaging
 rejects any binary built with the `mockmixer` or `rc2fxdev` tags.

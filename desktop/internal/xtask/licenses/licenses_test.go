@@ -110,7 +110,7 @@ func TestTheVelopackReportMatchesThePinnedVpkAndMerges(t *testing.T) {
 	}
 }
 
-func TestGpuikitNoticesMergeIdenticalTextsAndKeepTheListing(t *testing.T) {
+func TestGouiKitNoticesMergeIdenticalTextsAndKeepTheListing(t *testing.T) {
 	dir := t.TempDir()
 	write := func(path, text string) {
 		full := filepath.Join(dir, filepath.FromSlash(path))
@@ -121,15 +121,15 @@ func TestGpuikitNoticesMergeIdenticalTextsAndKeepTheListing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("THIRD_PARTY.md", "# Third-party software in libgpuikit\n")
+	write("THIRD_PARTY.md", "# Third-party software in libgouikit\n")
 	write("licences/texts/a-1.0/LICENSE-MIT", "MIT terms")
 	write("licences/texts/b-2.0/LICENSE", "MIT terms")
 	write("licences/texts/c-3.0/LICENSE-APACHE", "Apache terms")
-	sections, err := Gpuikit(dir)
+	sections, err := GouiKit(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sections) != 2 || !strings.Contains(sections[0].Text, "libgpuikit") {
+	if len(sections) != 2 || !strings.Contains(sections[0].Text, "libgouikit") {
 		t.Fatalf("%+v", sections)
 	}
 	text := sections[1].Text
@@ -137,7 +137,7 @@ func TestGpuikitNoticesMergeIdenticalTextsAndKeepTheListing(t *testing.T) {
 		!strings.Contains(text, "Used by: c-3.0 (LICENSE-APACHE)\n\nApache terms") {
 		t.Fatal(text)
 	}
-	if _, err := Gpuikit(filepath.Join(dir, "missing")); err == nil {
+	if _, err := GouiKit(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("a missing download was accepted")
 	}
 }

@@ -1,8 +1,9 @@
 # The desktop app in Go
 
 The desktop app is a single Go module (`github.com/ibanks42/rc2fx/desktop`)
-under `desktop/`. Its UI is built on GPUI-kit through the gpuikit Go bindings
-(package `gpuikit.dev/gk`). The mixer side stays in Rust under `crates/`.
+under `desktop/`. Its UI is built on GPUI-kit through goui-kit (package
+`github.com/ibanks42/goui-kit/gk` and its subpackages). The mixer side stays in
+Rust under `crates/`.
 Because the desktop app and the mixer have to agree on schemas, framing, and
 validation, some logic is mirrored on both sides. This page explains how the Go
 packages map to the Rust crates and the conventions that keep both copies in
@@ -19,7 +20,7 @@ sync.
 | `installer` (and `installer/platform`, `installer/embed`, `installer/control`, and others) | none | Installer engine: firmware downloads and patching, USB update mode, and the USB control client |
 | `ext2fs` | none | Vendored libext2fs from e2fsprogs via cgo, used by Repair mixer. Builds as a stub without cgo. |
 | `transport` | none | USB 1 control client for the app, plus the simulated mixer behind the `mockmixer` tag |
-| `app` (and subpackages), `cmd/rc2fx` | none | The UI. The only packages that import `gpuikit.dev/gk`. |
+| `app` (and subpackages), `cmd/rc2fx` | none | The UI. The only packages that import `github.com/ibanks42/goui-kit/gk` and its subpackages. |
 | `cmd/usb-probe` | none | Probe tool for the controller API over USB 1 |
 | `cmd/xtask`, `internal/xtask/...` | none | Development and release automation invoked via `./xtask` |
 
@@ -103,7 +104,9 @@ can jump between the two easily:
 
 Everything in the module builds without cgo except:
 
-- `app` and `cmd/rc2fx`, which link the gpuikit static library;
+- `app` and `cmd/rc2fx`, which link the goui-kit static library when built with
+  `-tags gkstatic` (without it, package `gk` looks for the shared library at
+  runtime);
 - `app/selfupdate/vpkc`, Velopack's C library (only with the `velopack` tag);
 - `ext2fs`, which compiles vendored libext2fs (falls back to a stub without
   cgo);
@@ -124,19 +127,21 @@ GOOS=darwin CGO_ENABLED=0 go vet $nocgo
 
 | Tag | Effect | In the Rust app (removed in 89296ea) |
 | --- | --- | --- |
+| `gkstatic` | Links `libgouikit_static.a` into the binary through cgo; without it, package `gk` looks for the shared library at runtime | none |
 | `rc2fxdev` | Development builds: local mixer release directory (`RC2FX_DEV_MIXER_REPOSITORY`), telemetry preview (`rc2fx --telemetry-preview`), flash autopilot, flow fixtures, and the storage fix debug log | a debug build (`debug_assertions`) |
 | `mockmixer` | In-process simulated mixer in place of USB 1 | the `mock-mixer` feature |
 | `embedded` | Compiles in the mixer payload staged by `cmd/stage-payload` | the `embedded` feature |
 | `velopack` | Enables self-update via Velopack's C library. Without it, the app cannot self-update, ignores Velopack install hooks, and accepts `RC2FX_DEV_UPDATE`. | always on |
 
-`./xtask app` enables `rc2fxdev` unless `--release` is passed. Packaging always
-enables `velopack` (plus `embedded` when `--embedded` is given) and refuses any
-binary built with `mockmixer` or `rc2fxdev`.
+`./xtask app` always enables `gkstatic` and adds `rc2fxdev` unless `--release`
+is passed. Packaging always enables `gkstatic` and `velopack` (plus `embedded`
+when `--embedded` is given) and refuses any binary built with `mockmixer` or
+`rc2fxdev`.
 
 ## Tests
 
 From `desktop/`, all non-UI packages can be vetted and tested on any machine
-without gpuikit:
+without goui-kit:
 
 ```sh
 CGO_ENABLED=0 go vet $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
@@ -144,11 +149,11 @@ go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
 go test -tags mockmixer ./transport/...
 ```
 
-With gpuikit unpacked in `third_party/gpuikit` and
-`CGO_LDFLAGS=-L$PWD/third_party/gpuikit/lib`, `go test ./...` covers the UI
-packages as well. `app/uitest` runs offscreen UI tests when
-`RC2FX_GPUIKIT_DIAG` points to a directory containing gpuikit's diagnostic
+With goui-kit unpacked in `third_party/goui-kit` and
+`CGO_LDFLAGS=-L$PWD/third_party/goui-kit/lib`, `go test -tags gkstatic ./...`
+covers the UI packages as well. `app/uitest` runs offscreen UI tests when
+`RC2FX_GOUIKIT_DIAG` points to a directory containing goui-kit's diagnostic
 library, and skips them otherwise. Prebuilt downloads don't include that
-library; build it from the bindings repository (`make lib`, then its
+library; build it from the `goui-kit` repository (`make lib`, then its
 `lib/diag`). `just test` runs the full Go suite followed by the Rust workspace
 tests on Linux.

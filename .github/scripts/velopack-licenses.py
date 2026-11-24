@@ -7,9 +7,8 @@ UpdateNix) and writes `licenses/velopack-VERSION.json`.
 
 Usage: velopack-licenses.py VERSION
 
-Requires git, cargo, and cargo-about. Re-run whenever VPKVersion in
-desktop/internal/xtask/licenses/licenses.go (plus setup-vpk.sh and
-desktop/scripts/fetch-velopack.sh) is bumped.
+Requires git, cargo, and cargo-about. Re-run whenever the Velopack version in
+config/velopack.json is bumped.
 """
 
 import json

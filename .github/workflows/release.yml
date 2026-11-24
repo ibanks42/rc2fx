@@ -35,15 +35,15 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      # Fail early if any shipped platform is missing a gpuikit SHA-256 pin.
-      - name: Require a gpuikit pin for every shipped platform
+      # Fail early if any shipped platform is missing a goui-kit SHA-256 pin.
+      - name: Require a goui-kit pin for every shipped platform
         run: |
           missing=
-          for pin in sha_windows_x86_64 sha_linux_x86_64 sha_macos_universal; do
-            grep -Eq "^$pin=[0-9a-f]{64}\$" desktop/scripts/fetch-gpuikit.sh || missing="$missing $pin"
+          for platform in windows-x86_64 linux-x86_64 macos-universal; do
+            grep -Eq "\"$platform\": *\"[0-9a-f]{64}\"" config/goui-kit.json || missing="$missing $platform"
           done
           if [ -n "$missing" ]; then
-            echo "::error::desktop/scripts/fetch-gpuikit.sh has no SHA-256 for:$missing"
+            echo "::error::config/goui-kit.json has no SHA-256 for:$missing"
             exit 1
           fi
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
@@ -111,18 +111,16 @@ jobs:
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      # Go + cgo against gpuikit and velopack_libc (base notices come from prepare).
+      # Go + cgo against goui-kit and velopack_libc (base notices come from prepare).
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
-      - name: Fetch gpuikit
-        env:
-          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
-        run: bash desktop/scripts/fetch-gpuikit.sh windows-amd64
+      - name: Fetch goui-kit
+        run: ./xtask fetch-goui-kit windows-amd64
       - name: Fetch the Velopack C library
-        run: bash desktop/scripts/fetch-velopack.sh windows-amd64
-      # MinGW gcc + lld strips unused gpuikit components; windres embeds icon/version info.
+        run: ./xtask fetch-velopack windows-amd64
+      # MinGW gcc + lld strips unused goui-kit components; windres embeds icon/version info.
       - name: Check the C toolchain
         run: gcc --version && ld.lld --version && windres --version
       # vpk packages and signs with Azure Artifact Signing when configured.
@@ -224,8 +222,6 @@ jobs:
         env:
           CONTAINER_ENGINE: docker
           RC2FX_BUILD_IMAGE: ${{ needs.image.outputs.image }}
-          # Read by desktop/scripts/fetch-gpuikit.sh in the build container.
-          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
         run: bash .github/scripts/package-check.sh
       - uses: actions/upload-artifact@v7.0.2
         with:
@@ -257,12 +253,10 @@ jobs:
         with:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
-      - name: Fetch gpuikit
-        env:
-          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
-        run: bash desktop/scripts/fetch-gpuikit.sh darwin-universal
+      - name: Fetch goui-kit
+        run: ./xtask fetch-goui-kit darwin-universal
       - name: Fetch the Velopack C library
-        run: bash desktop/scripts/fetch-velopack.sh darwin-universal
+        run: ./xtask fetch-velopack darwin-universal
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x

@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/installer"
@@ -106,7 +107,7 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 	body := gk.VFlex(s.WFull).Gap(px(16)).Child(taskHeading("Before you start")).
 		Child(bullets(
 			bullet(txt("This works around a Linux ext4 driver bug on the mixer that can corrupt files during updates."),
-				gk.Link("task-update-bug").Child(txt("What is this?")).
+				kit.Link("task-update-bug").Child(txt("What is this?")).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx) })),
 			bullet(txt(fmt.Sprintf("RC2FX is not installed. Your mixer keeps %s, exactly as RØDE ships it.", withVersion(fixVersion(i))))),
 			bullet(txt("The mixer’s audio is off for about 10 minutes, and the mixer restarts by itself several times.")),
@@ -136,7 +137,7 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 		body = body.Child(prose("Your system will ask for your password once, when the fix starts. The app uses it only to update the mixer.", Faint))
 	}
 	t.body = body
-	t.secondary = []gk.ButtonEl{taskButton("task-not-now", "Not now", false).Disabled(i.busy()).
+	t.secondary = []kit.ButtonEl{taskButton("task-not-now", "Not now", false).Disabled(i.busy()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })}
 	label := "Fix the update bug"
 	if !i.access.AllowsFlashing() {
@@ -189,7 +190,7 @@ func (a *App) fixUpdatePanel(p *installer.Progress) gk.DivEl {
 			Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(sending))).
 			Child(gk.Div(s.Flex1, s.MinW0).Child(txt("1. Sending the firmware to the mixer"))).
 			Child(gk.Div().TextColor(rgb(Faint)).Child(txt(share)))).
-		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(gk.Progress("task-progress").Value(value))).
+		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(kit.Progress("task-progress").Value(value))).
 		Child(seenRow(installing, "2. The mixer installs it, then restarts. This part has no progress to show.", waiting))
 	if line := fixDetailLine(p); fill == nil && line != "" {
 		panel = panel.Child(gk.Div(s.Pt2).Child(a.spinnerLine(line)))
@@ -257,7 +258,7 @@ func (a *App) fixRunningPage(i *Installer, t *guidedTask) {
 	if f.Canceling {
 		stop = "Stopping…"
 	}
-	t.secondary = []gk.ButtonEl{taskButton("task-stop", stop, false).Disabled(!f.CanStop()).
+	t.secondary = []kit.ButtonEl{taskButton("task-stop", stop, false).Disabled(!f.CanStop()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.stopTask(cx) })}
 	t.primary = taskButton("task-done", "Done", true).Disabled(true)
 }
@@ -269,7 +270,7 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 	device := i.model.Device.Label()
 	version := withVersion(fixVersion(i))
 	body := gk.VFlex(s.WFull).Gap(px(16))
-	done := func() gk.ButtonEl {
+	done := func() kit.ButtonEl {
 		return taskButton("task-done", "Done", true).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
 	}
@@ -281,7 +282,7 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 			body = body.Child(prose("A copy of the mixer’s original storage layout is saved on this computer.", Faint))
 		}
 		t.body = body
-		t.secondary = []gk.ButtonEl{taskButton("task-install", "Install RC2FX…", false).Disabled(i.busy()).
+		t.secondary = []kit.ButtonEl{taskButton("task-install", "Install RC2FX…", false).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				a.closeTask(cx, false)
 				a.openTask(cx, taskInstall)
@@ -343,7 +344,7 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 			body = body.Child(prose("“Try again” works once the app sees the mixer back in normal mode.", Faint))
 			t.body = body
 		}
-		t.secondary = []gk.ButtonEl{taskButton("task-close", "Close", false).Disabled(i.busy()).
+		t.secondary = []kit.ButtonEl{taskButton("task-close", "Close", false).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })}
 		t.primary = taskButton("task-retry", label, true).
 			Disabled(i.busy() || !normal || i.access.Kind == installflow.AccessAsking).

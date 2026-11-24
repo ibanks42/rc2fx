@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
@@ -41,16 +44,16 @@ func flag(text string, tone model.Tone) gk.DivEl {
 		Child(txt(text))
 }
 
-func styledDialog(width float32) gk.DialogEl {
-	return gk.Dialog(s.P6, s.Border1).W(width).Rounded(px(20)).Bg(rgb(surface().Panel)).
+func styledDialog(width float32) overlay.DialogEl {
+	return overlay.Dialog(s.P6, s.Border1).W(width).Rounded(px(20)).Bg(rgb(surface().Panel)).
 		BorderColor(rgb(surface().LineStrong)).TextColor(rgb(Text)).FontFamily("Inter")
 }
 
-func versionsPill(button gk.ButtonEl) gk.ButtonEl {
+func versionsPill(button kit.ButtonEl) kit.ButtonEl {
 	return button.H(px(34)).Px(px(16)).Rounded(float32(17))
 }
 
-func large(button gk.ButtonEl) gk.ButtonEl {
+func large(button kit.ButtonEl) kit.ButtonEl {
 	return button.Large().H(px(44)).Style(s.Px5).Rounded(float32(22))
 }
 
@@ -77,7 +80,7 @@ type changeEntry struct {
 }
 
 type changesDialog struct {
-	built gk.Built[gk.DialogEl]
+	built gk.Built[overlay.DialogEl]
 	made  bool
 	theme gk.BaseTheme
 	open  *openChanges
@@ -117,21 +120,21 @@ func (a *App) openChangesDialog(cx *gk.Cx, spec Changes) {
 		d.built = gk.NewBuilt(cx, a.changesView)
 		d.made = true
 	}
-	gk.OpenDialog(cx, d.built)
+	overlay.OpenDialog(cx, d.built)
 }
 
 // TODO(B1 image source): once BaseTextViewEl supports a custom image source,
 // pass one that returns an empty image so untrusted notes can never trigger
 // remote fetches. SafeMarkdown already escapes `![` outside code blocks.
-func (a *App) changesView(cx *gk.Cx) gk.DialogEl {
+func (a *App) changesView(cx *gk.Cx) overlay.DialogEl {
 	d := &a.appUpdate.changes
 	open := d.open
 	if open == nil {
 		open = &openChanges{}
 	}
 	spec := open.spec
-	style := func() gk.BaseTextViewStyle {
-		return gk.NewBaseTextViewStyleFromTheme(d.theme).WithForeground(rgb(Muted)).
+	style := func() editor.BaseTextViewStyle {
+		return editor.NewBaseTextViewStyleFromTheme(d.theme).WithForeground(rgb(Muted)).
 			WithLink(rgb(Accent)).WithCodeBackground(rgb(surface().Raised))
 	}
 	body := gk.VFlex(s.Gap5, s.Border1).MaxH(px(420)).P(px(18)).Rounded(px(12)).
@@ -145,7 +148,7 @@ func (a *App) changesView(cx *gk.Cx) gk.DialogEl {
 		if entry.empty {
 			item = item.Child(gk.Div().TextColor(rgb(Muted)).Child(txt("No notes for this release.")))
 		} else {
-			item = item.Child(gk.BaseTextViewMarkdown(gk.Key("change-notes", i), entry.notes).
+			item = item.Child(editor.BaseTextViewMarkdown(gk.Key("change-notes", i), entry.notes).
 				Style(style()).Selectable(true).
 				OnLinkClick(func(cx *gk.Cx, e gk.Event83) {
 					if url, ok := updates.SafeURL(e.A0); ok {
@@ -158,13 +161,13 @@ func (a *App) changesView(cx *gk.Cx) gk.DialogEl {
 		}
 		body = body.Child(item)
 	}
-	footer := gk.DialogFooter(s.Pt5)
+	footer := overlay.DialogFooter(s.Pt5)
 	for i, l := range spec.links {
 		if button, ok := link(gk.Key("change-link", i), l.label, l.url); ok {
 			footer = footer.Child(large(button).Style(s.Border1))
 		}
 	}
-	footer = footer.Child(gk.DialogClose().Trigger(gk.Button("change-close").Primary().Large().
+	footer = footer.Child(overlay.DialogClose().Trigger(kit.Button("change-close").Primary().Large().
 		H(px(44)).Style(s.Px5).Rounded(float32(22)).FontSemibold().Label("Close")))
 	return styledDialog(720).
 		Title(gk.VFlex(s.Gap1).
@@ -247,12 +250,12 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	download := !inPlace
 	hasPrimary := inPlace
 	if hasRelease && (!inPlace || updateState.Kind == selfupdate.StateFailed) {
-		var button gk.ButtonEl
+		var button kit.ButtonEl
 		if download {
 			hasPrimary = true
-			button = versionsPill(gk.Button("versions-download").Primary()).FontSemibold().Label("Download")
+			button = versionsPill(kit.Button("versions-download").Primary()).FontSemibold().Label("Download")
 		} else {
-			button = versionsPill(gk.Button("versions-download").Ghost().Style(s.Border1)).
+			button = versionsPill(kit.Button("versions-download").Ghost().Style(s.Border1)).
 				BorderColor(rgb(surface().LineStrong)).Label("Release page")
 		}
 		actions = actions.Child(button.Icon(gk.IconExternalLink).
@@ -261,12 +264,12 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	}
 	acting = acting || inPlace
 	if overview.OfferInstaller {
-		var button gk.ButtonEl
+		var button kit.ButtonEl
 		if hasPrimary {
-			button = versionsPill(gk.Button("versions-installer").Ghost().Style(s.Border1)).
+			button = versionsPill(kit.Button("versions-installer").Ghost().Style(s.Border1)).
 				BorderColor(rgb(surface().LineStrong))
 		} else {
-			button = versionsPill(gk.Button("versions-installer").Primary()).FontSemibold()
+			button = versionsPill(kit.Button("versions-installer").Primary()).FontSemibold()
 		}
 		label, open := "Update RC2FX", func(cx *gk.Cx) { a.openTask(cx, taskUpdate) }
 		if _, ok := a.directInPlaceOffer(); ok {
@@ -309,7 +312,7 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	if failure != "" {
 		body = body.Child(gk.Div(s.TextXs).TextColor(rgb(Faint)).Child(txt(failure)))
 	}
-	check := gk.Button("versions-check").Ghost().Small().Label("Check for updates").
+	check := kit.Button("versions-check").Ghost().Small().Label("Check for updates").
 		Disabled(a.appUpdate.Checking).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.checkAppUpdate(cx, true) })
 	return settingsSection("Versions", check, body)
@@ -317,8 +320,8 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 
 // updateButton renders the self-update button (fixed min width across states)
 // and its accompanying status note.
-func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
-	button := versionsPill(gk.Button("versions-update").Primary()).FontSemibold().MinW(px(184))
+func (a *App) updateButton(state selfupdate.State) (kit.ButtonEl, string) {
+	button := versionsPill(kit.Button("versions-update").Primary()).FontSemibold().MinW(px(184))
 	switch state.Kind {
 	case selfupdate.StateDownloading:
 		return button.Label(fmt.Sprintf("Downloading %d%%", state.Percent)).Icon(gk.IconLoaderCircle).Disabled(true),
@@ -349,8 +352,8 @@ func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.downloadAppUpdate(cx) }), note
 }
 
-func (a *App) whatsNew(id gk.ID, part model.Part) gk.ButtonEl {
-	return versionsPill(gk.Button(id).Ghost().Style(s.Border1)).BorderColor(rgb(surface().LineStrong)).
+func (a *App) whatsNew(id gk.ID, part model.Part) kit.ButtonEl {
+	return versionsPill(kit.Button(id).Ghost().Style(s.Border1)).BorderColor(rgb(surface().LineStrong)).
 		Label("What's new").
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openChanges(cx, part) })
 }

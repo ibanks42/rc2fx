@@ -293,18 +293,17 @@ parallel and publishes only once every package is verified.
    **Mixer release**.
 2. **windows**, **linux**, and **macos** run concurrently. **windows** and
    **macos** apply the prepare output, install the Go version from
-   `desktop/go.mod`, fetch gpuikit (`desktop/scripts/fetch-gpuikit.sh`, using
-   `GPUIKIT_TOKEN` or falling back to the workflow token) and Velopack's C
-   library (`desktop/scripts/fetch-velopack.sh`) verified against pinned
-   SHA-256s, install .NET and a checksummed vpk (`.github/scripts/setup-vpk.sh`),
-   and run `./xtask package` in download-only mode. **windows** also sets up
-   MinGW-w64 gcc for cgo and `windres` for the icon, running `--build-only`
-   first, authenticating to Azure only right before signing so the token is
-   fresh, and finishing with `--skip-build`. When signing is configured, it
-   verifies that `RC2FX_ExecutionStub.exe`, `Squirrel.exe`, `rc2fx.exe`, and
-   `velopack_libc.dll` inside the `.nupkg`, plus `-setup.exe`, all carry valid,
-   timestamped Authenticode signatures (see [Signing](#signing)). **macos**
-   signs and notarizes the macOS artifacts.
+   `desktop/go.mod`, fetch goui-kit (`./xtask fetch-goui-kit TARGET`) and
+   Velopack's C library (`./xtask fetch-velopack TARGET`) verified against
+   pinned SHA-256s in `config/goui-kit.json` and `config/velopack.json`,
+   install .NET and a checksummed vpk (`.github/scripts/setup-vpk.sh`), and
+   run `./xtask package` in download-only mode. **windows** also sets up MinGW-w64 gcc for cgo and `windres` for the
+   icon, running `--build-only` first, authenticating to Azure only right before
+   signing so the token is fresh, and finishing with `--skip-build`. When
+   signing is configured, it verifies that `RC2FX_ExecutionStub.exe`,
+   `Squirrel.exe`, `rc2fx.exe`, and `velopack_libc.dll` inside the `.nupkg`,
+   plus `-setup.exe`, all carry valid, timestamped Authenticode signatures (see
+   [Signing](#signing)). **macos** signs and notarizes the macOS artifacts.
    Packaging verifies the binary's payload mode even with `--skip-build` and
    rejects mismatches; explicit `--embedded` packaging also checks the embedded
    payload against current inputs and rejects stale binaries.
@@ -368,24 +367,23 @@ The **Check** workflow lints, tests, and audits pushes and pull requests to
   all non-UI packages (everything except `app` and `cmd/rc2fx`), `transport`
   tests with `mockmixer`, a vet pass with `rc2fxdev` and `embedded` (using an
   empty stand-in payload), and Velopack cgo vetting (`app/selfupdate/...`). It
-  then fetches gpuikit to vet the UI (with and without `mockmixer` and with
-  `rc2fxdev,embedded`), link `cmd/rc2fx` with release flags, run
-  `go test ./app ./cmd/rc2fx`, and run a single `govulncheck` pass on Linux.
-  Offscreen UI tests in `app/uitest` skip here because prebuilt gpuikit
-  downloads don't include the diagnostic library. If an OS's gpuikit SHA-256
-  isn't pinned in `desktop/scripts/fetch-gpuikit.sh` yet, or on fork PRs without
-  bindings access, the UI steps skip with a warning while all non-UI checks
-  still run (Release's **prepare** refuses to run until all three are pinned).
+  then fetches goui-kit to vet the UI with `gkstatic` (plain, with `mockmixer`,
+  and with `rc2fxdev,embedded`), link `cmd/rc2fx` with release flags, run
+  `go test -tags gkstatic ./app ./cmd/rc2fx`, and run a single `govulncheck`
+  pass on Linux (also with `-tags gkstatic` when goui-kit is present).
+  Offscreen UI tests in `app/uitest` skip here because prebuilt goui-kit
+  downloads don't include the diagnostic library. If an OS's goui-kit SHA-256
+  isn't pinned in `config/goui-kit.json` yet, the UI steps skip
+  with a warning while all non-UI checks still run (Release's **prepare**
+  refuses to run until all three are pinned).
 - **desktop-alma** builds the app and tests the installer (with vendored
   libext2fs) inside the same AlmaLinux 8 container used for AppImage builds.
 
-Both UI jobs fetch gpuikit using `GPUIKIT_TOKEN`, falling back to the workflow
-token; a fork PR without secrets that can't fetch it skips the UI build with a
-warning, while any other run fails. Rust formatting, linting, and tests also
-run on Linux inside the AlmaLinux 8 image. The Linux CI job builds without
-debug info and with unoptimized dependencies (`.github/cargo-ci.toml`), more
-than halving cold build times. Only `main` runs save Rust and Go build caches;
-PRs read from them, and a twice-weekly scheduled run keeps caches warm.
+Rust formatting, linting, and tests also run on Linux inside the AlmaLinux 8
+image. The Linux CI job builds without debug info and with unoptimized
+dependencies (`.github/cargo-ci.toml`), more than halving cold build times. Only
+`main` runs save Rust and Go build caches; PRs read from them, and a
+twice-weekly scheduled run keeps caches warm.
 
 The **Build image** workflow builds and pushes
 `.github/scripts/package-check.Containerfile` to
@@ -628,9 +626,11 @@ signing.
 
 ## Per-platform build runners
 
-The desktop app links the platform-specific gpuikit static library via cgo, and
-gpuikit itself has to be compiled on each OS because GPUI only compiles its
-shaders natively on macOS and Windows. Packaging is platform-specific as well:
+The desktop app links the platform-specific goui-kit static library via cgo.
+Passing `-tags gkstatic` selects that static library; without it, package `gk`
+looks for the shared library at runtime. Because GPUI only compiles its shaders
+natively on macOS and Windows, goui-kit itself has to be compiled on each OS.
+Packaging is platform-specific as well:
 `vpk`, Azure Authenticode signing, and macOS Developer ID signing and
 notarization each require their native OS. As a result, each platform builds on
 its own GitHub runner.

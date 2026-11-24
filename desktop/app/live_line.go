@@ -6,7 +6,8 @@ package app
 import (
 	"time"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/chart"
 
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -27,7 +28,7 @@ func levelOf(history *model.LevelHistory, now time.Time) float32 {
 func livePlot(width, height, phase, lvl float32, state levels.LineState, style LineStyle) gk.Element {
 	points, ok := levels.LinePoints(width, height, phase, lvl, state, style)
 	if !ok {
-		return gk.Plot()
+		return chart.Plot()
 	}
 	path := make([][2]float32, len(points))
 	for i, p := range points {
@@ -41,9 +42,9 @@ func livePlot(width, height, phase, lvl float32, state levels.LineState, style L
 				gk.NewLinearColorStop(rgbAlpha(Accent, alpha), 0),
 				gk.NewLinearColorStop(rgbAlpha(Violet, alpha), 1))
 		}
-		parts = append(parts, gk.NewPlotLine(path, style.Stroke, faded(1)))
+		parts = append(parts, chart.NewPlotLine(path, style.Stroke, faded(1)))
 	case levels.LineStateUnavailable:
-		parts = append(parts, gk.NewPlotLine(path, style.Stroke, rgbAlpha(Faint, 0.5)))
+		parts = append(parts, chart.NewPlotLine(path, style.Stroke, rgbAlpha(Faint, 0.5)))
 	}
-	return gk.Plot(parts...)
+	return chart.Plot(parts...)
 }

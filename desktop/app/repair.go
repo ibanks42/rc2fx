@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/installer"
@@ -91,7 +92,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		scroll: i.controlsScroll,
 		unplug: r.Unplug(),
 	}
-	stop := func(label string) gk.ButtonEl {
+	stop := func(label string) kit.ButtonEl {
 		return taskButton("task-stop", label, false).Disabled(r.Busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
 	}
@@ -117,7 +118,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 			body = body.Child(prose("Your system will ask for your password once, when the check starts. The app uses it only to read and repair the mixer.", Faint))
 		}
 		t.body = body
-		t.secondary = []gk.ButtonEl{stop("Stop")}
+		t.secondary = []kit.ButtonEl{stop("Stop")}
 		// If privileges are still needed, clicking prompts for them and the next
 		// poll starts the check automatically.
 		label := "Check"
@@ -135,12 +136,12 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		}
 		body = body.Child(taskHeading(heading)).Child(a.spinnerLine(what))
 		if p := i.progress; p != nil && p.Total > 0 {
-			body = body.Child(gk.Progress("task-progress").
+			body = body.Child(kit.Progress("task-progress").
 				Value(min(max(float32(p.Completed)/float32(p.Total)*100, 0), 100)))
 		}
 		body = body.Child(prose("Keep the mixer connected until this finishes.", Faint))
 		t.body = body
-		t.secondary = []gk.ButtonEl{stop("Stop")}
+		t.secondary = []kit.ButtonEl{stop("Stop")}
 		t.primary = taskButton("task-done", "Done", true).Disabled(true)
 		return t
 	case installflow.RepairFailed:
@@ -158,7 +159,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 			Child(prose(r.Stage.Error, Muted)).
 			Child(seen).
 			Child(prose("“Check again” looks at the mixer again before anything is written.", Faint))
-		t.secondary = []gk.ButtonEl{stop("Close")}
+		t.secondary = []kit.ButtonEl{stop("Close")}
 		t.primary = taskButton("task-retry", "Check again", true).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) })
 		return t
@@ -185,7 +186,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) })
 		if findings.Repairable() == 0 {
 			t.body = body.Child(leaveStorageMode())
-			t.secondary = []gk.ButtonEl{again}
+			t.secondary = []kit.ButtonEl{again}
 			t.primary = taskButton("task-done", "Done", true).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
 			return t
@@ -193,7 +194,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		t.body = body.Child(taskPanel().
 			Child(eyebrow("To leave storage mode without repairing")).
 			Child(prose("Unplug USB 1 and plug it back in. The mixer starts normally. Nothing has been written yet.", Muted)))
-		t.secondary = []gk.ButtonEl{stop("Stop"), again}
+		t.secondary = []kit.ButtonEl{stop("Stop"), again}
 		t.primary = taskButton("task-start", "Back up and repair", true).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startRepair(cx) })
 		return t

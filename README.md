@@ -68,11 +68,10 @@ cgo (MinGW-w64 gcc on Windows), Rust ([rustup](https://rustup.rs)),
 ```sh
 git clone https://github.com/ibanks42/rc2fx
 cd rc2fx
-just setup                          # once: Rust target and cargo-zigbuild
-desktop/scripts/fetch-gpuikit.sh    # once: prebuilt UI library
-just app                            # run the desktop app (dev build)
-just test                           # run Go tests/vet (and Rust tests/clippy on Linux)
-just mixer-build                    # cross-build the mixer runtime into target/mixer
+just setup          # once: mixer build tools, goui-kit, and Velopack
+just app            # run the desktop app (dev build)
+just test           # run Go tests/vet (and Rust tests/clippy on Linux)
+just mixer-build    # cross-build the mixer runtime into target/mixer
 ```
 
 See the [developer guide](docs/developer/index.md) for setup details and how

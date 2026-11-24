@@ -6,7 +6,9 @@ package app
 import (
 	"fmt"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/updates"
@@ -22,12 +24,12 @@ type AppUpdate struct {
 }
 
 // link returns an external-link ghost button if updates.SafeURL permits url.
-func link(id gk.ID, label, url string) (gk.ButtonEl, bool) {
+func link(id gk.ID, label, url string) (kit.ButtonEl, bool) {
 	url, ok := updates.SafeURL(url)
 	if !ok {
-		return gk.ButtonEl{}, false
+		return kit.ButtonEl{}, false
 	}
-	return gk.Button(id).Ghost().Label(label).Icon(gk.IconExternalLink).
+	return kit.Button(id).Ghost().Label(label).Icon(gk.IconExternalLink).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { gk.OpenURL(cx, url) }), true
 }
 
@@ -46,7 +48,7 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 	gk.Go(cx, func() appupdate.UpdateSnapshot { return appupdate.CheckForUpdates(model.AppVersion) },
 		func(cx *gk.Cx, result appupdate.UpdateSnapshot) {
 			if result.App != nil && result.App.Kind == appupdate.UpdateAvailable {
-				gk.PushNotification(cx, fmt.Sprintf("RC2FX %s is available. See Settings > Versions.", result.App.Version))
+				overlay.PushNotification(cx, fmt.Sprintf("RC2FX %s is available. See Settings > Versions.", result.App.Version))
 			}
 			a.appUpdate.Finish(result, manual)
 			a.notify(cx)

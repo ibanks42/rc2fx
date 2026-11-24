@@ -220,7 +220,7 @@ Linux, an AppImage plus its update package and feed, all created by Velopack's
 
 - the self-contained desktop executable, and
 - the project license, third-party notices, training-data credits, and license
-  texts for every Rust crate, Go module, and gpuikit component, viewable inside
+  texts for every Rust crate, Go module, and goui-kit component, viewable inside
   the app under **Settings › About › View licenses** (the AppImage also ships
   them as `LICENSES.html`).
 
@@ -233,7 +233,7 @@ runs even with `--skip-build`.
 
 `--target TRIPLE` (using Rust-style triples such as `x86_64-unknown-linux-gnu`)
 targets another architecture for the same OS when cgo supports it and the
-matching gpuikit and Velopack libraries are present. macOS packages are always
+matching goui-kit and Velopack libraries are present. macOS packages are always
 universal (`arm64` and `x86_64`), regardless of which Apple triple is passed.
 `--skip-build` reuses an existing release binary, and `--build-only` stops
 after compilation. Windows and macOS packages are signed only when signing

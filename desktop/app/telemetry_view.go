@@ -7,8 +7,10 @@ package app
 import (
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -61,12 +63,12 @@ func checkRow(check telemetry.Check, first bool) gk.DivEl {
 		Child(answer)
 }
 
-func badge(name, text string, color uint32) gk.TagEl {
+func badge(name, text string, color uint32) kit.TagEl {
 	row := gk.HFlex(s.ItemsCenter, s.Gap1, s.TextXs)
 	if name != "" {
 		row = row.Child(gk.Div().TextColor(rgb(Muted)).Child(txt(name)))
 	}
-	return gk.TagSecondary().Small().RoundedFull().
+	return kit.TagSecondary().Small().RoundedFull().
 		Child(row.Child(gk.Div(s.FontSemibold).TextColor(rgb(color)).Child(txt(text))))
 }
 
@@ -74,7 +76,7 @@ func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Te
 	status := telemetry.StatusOf(engine, routing, snapshot)
 	color := toneColor(status.Tone())
 	row := gk.HFlex(s.FlexWrap, s.ItemsCenter, s.Gap2).
-		Child(gk.TagSecondary().Small().RoundedFull().Child(
+		Child(kit.TagSecondary().Small().RoundedFull().Child(
 			gk.HFlex(s.ItemsCenter, s.Gap1p5, s.TextXs, s.FontSemibold).TextColor(rgb(color)).
 				Child(telemetryDot(color)).
 				Child(txt(status.Label()))))
@@ -121,14 +123,14 @@ func channelRow(path *telemetry.PathView, sampleRate uint32, now time.Time, mono
 		}
 		issueCell = gk.Div().Child(gk.Div(s.Truncate).ID("telemetry-issues-" + meter.ID).
 			TextColor(rgb(color)).Child(txt(text)).
-			Tooltip(gk.NewKitTooltip(text)))
+			Tooltip(overlay.NewKitTooltip(text)))
 	} else {
 		issueCell = gk.Div().Child(gk.Div().TextColor(rgb(Faint)).Child(txt("-")))
 	}
 	name := gk.HFlex(s.FlexShrink0, s.ItemsCenter, s.Gap2).W(px(nameWidth)).
 		Child(gk.Div(s.MinW0, s.Truncate, s.TextSm, s.FontSemibold).Child(txt(path.Name)))
 	if label := telemetry.FormatLabel(path.Channels); label != "" {
-		name = name.Child(gk.TagSecondary().Outline().Small().Child(txt(label)))
+		name = name.Child(kit.TagSecondary().Outline().Small().Child(txt(label)))
 	}
 	return gk.HFlex(s.ItemsCenter, s.Gap4, s.Py2, s.BorderT1).BorderColor(rgb(surface().Line)).
 		Child(name).
@@ -158,7 +160,7 @@ func factRow(fact telemetry.Fact, mono string) gk.Element {
 			TextColor(rgb(Muted)).TextDecorationColor(rgb(surface().LineStrong)).Child(txt(fact.Label))).
 		Child(gk.Div(s.FlexShrink0, s.TextXs).FontFamily(mono).TextColor(rgb(Text)).Child(txt(fact.Value)))
 	return row.ID("telemetry-fact-" + fact.Label).
-		Tooltip(gk.NewKitTooltipElement(gk.Div(s.Py1).W(px(InfoWidth)).Child(txt(fact.Help))))
+		Tooltip(overlay.NewKitTooltipElement(gk.Div(s.Py1).W(px(InfoWidth)).Child(txt(fact.Help))))
 }
 
 func factGrid(facts []telemetry.Fact, mono string) gk.DivEl {

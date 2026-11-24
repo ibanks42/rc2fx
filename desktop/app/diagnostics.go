@@ -10,8 +10,9 @@ import (
 	"os"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
@@ -116,7 +117,7 @@ func (a *App) telemetryAside(cx *gk.Cx) gk.DivEl {
 		Child(gk.Div(s.TextXs).TextColor(rgb(Faint)).
 			Child(txt("Live · " + telemetry.SinceLabel(log.Since, log.Epoch))))
 	if !a.confirmReset {
-		aside = aside.Child(gk.Button("show-events").Outline().Small().Icon(gk.IconExternalLink).Label("Events").
+		aside = aside.Child(kit.Button("show-events").Outline().Small().Icon(gk.IconExternalLink).Label("Events").
 			Tooltip("Open the events window").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openEvents(cx) }))
 	}

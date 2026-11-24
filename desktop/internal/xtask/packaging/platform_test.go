@@ -158,7 +158,7 @@ func TestUnexpectedBundledLibrariesNeedReviewedNotices(t *testing.T) {
 			t.Errorf("%s", name)
 		}
 	}
-	for _, name := range []string{"libnew.so.1", "libXau.something", "libbsd-ctor.so.0", "libgpuikit.so"} {
+	for _, name := range []string{"libnew.so.1", "libXau.something", "libbsd-ctor.so.0", "libgouikit.so"} {
 		if coveredLibrary(name) {
 			t.Errorf("%s", name)
 		}

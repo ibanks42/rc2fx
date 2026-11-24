@@ -1,7 +1,7 @@
 # Desktop app
 
-This is the RC2FX desktop app, written in Go on GPUI-kit through the gpuikit Go
-bindings (packages `app`, its subpackages, and `cmd/rc2fx`). It communicates
+This is the RC2FX desktop app, written in Go on GPUI-kit through goui-kit
+(packages `app`, its subpackages, and `cmd/rc2fx`). It communicates
 with `rc2fxd` on the mixer over USB 1 with no background daemon. Once you close
 the app, audio processing keeps running on the mixer.
 
@@ -15,9 +15,11 @@ just desktop    # build target/release/rc2fx (rc2fx.exe on Windows)
 - Go at the version specified in `desktop/go.mod`, plus a C compiler for cgo:
   MinGW-w64 gcc on Windows, gcc (or clang) on Linux, or the Xcode command-line
   tools on macOS.
-- The gpuikit static library for your platform in `desktop/third_party/gpuikit`
-  (fetched by `desktop/scripts/fetch-gpuikit.sh`), linked directly into the
-  binary.
+- The goui-kit static library for your platform in `desktop/third_party/goui-kit`
+  (fetched by `just setup`, or `./xtask fetch-goui-kit TARGET` for CI or
+  another platform), linked directly into the binary. Builds pass
+  `-tags gkstatic` to select the static library; without it, package `gk` looks
+  for the shared library at runtime.
 - On Linux: a graphical desktop session and a working Vulkan driver (see
   [Linux setup](../../docs/developer/linux.md)).
 

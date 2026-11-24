@@ -5,7 +5,7 @@
 # oldest maintained base, and the oldest glibc GitHub's JavaScript actions
 # run on. It has the pinned Rust (for Check's lints and tests, and with
 # cargo-about for the AppImage's notices), Go for ./xtask and the desktop app
-# (cgo against gpuikit's static library, whose system libraries the AppImage
+# (cgo against goui-kit's static library, whose system libraries the AppImage
 # bundles from here),
 # and .NET and mksquashfs for vpk, which makes the AppImage.
 FROM docker.io/library/almalinux:8
@@ -33,7 +33,7 @@ RUN curl --fail --location --proto '=https' -o /tmp/squashfs-tools.tar.gz \
     && install -m 755 /tmp/squashfs-tools/squashfs-tools/mksquashfs /tmp/squashfs-tools/squashfs-tools/unsquashfs /usr/local/bin/ \
     && rm -rf /tmp/squashfs-tools /tmp/squashfs-tools.tar.gz \
     && mksquashfs -version | head -1
-# gpuikit's static library calls xkb_utf32_to_keysym, which libxkbcommon has
+# goui-kit's static library calls xkb_utf32_to_keysym, which libxkbcommon has
 # from 1.0; AlmaLinux 8 has 0.9.1. Build the pinned release into /usr/local,
 # where the linker (LIBRARY_PATH) and the loader find it before the system's,
 # so the app links against it and the AppImage bundles it, with that

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/core"

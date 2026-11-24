@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -115,7 +116,7 @@ func (a *App) railHeader(target *core.Target, cx *gk.Cx) gk.Element {
 		Child(gk.HFlex(s.ItemsCenter, s.Gap3).Pl(px(12)).Pr(px(4)).
 			Child(gk.Div(s.Flex1, s.MinW0, s.Truncate, s.FontBold).TextSize(px(18)).Child(txt(a.targetName(target)))).
 			Child(gk.Div(s.FlexShrink0).ID("channel-processing-wrap").Child(sw).
-				Tooltip(gk.NewKitTooltip("Processing: run this channel through RC2FX on the mixer.")))).
+				Tooltip(overlay.NewKitTooltip("Processing: run this channel through RC2FX on the mixer.")))).
 		Child(line).
 		Child(a.liveBar(target))
 }

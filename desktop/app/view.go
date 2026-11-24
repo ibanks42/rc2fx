@@ -5,8 +5,9 @@ import (
 	"slices"
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -228,7 +229,7 @@ func (a *App) engineErrorCard(cx *gk.Cx) (gk.DivEl, bool) {
 		Child(gk.Div(s.TextSm).Child(txt(notice.Message))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Muted)).
 			Child(txt("Last reported recovery status: " + notice.RecoveryDetail))).
-		Child(gk.Div().Child(gk.Button("export-error-diagnostics").Label("Export diagnostics…").
+		Child(gk.Div().Child(kit.Button("export-error-diagnostics").Label("Export diagnostics…").
 			Disabled(a.diagnosticsPending || a.fileBusy || !a.session.Connected).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.requestDiagnostics(cx) }))), true
 }
@@ -238,7 +239,7 @@ func (a *App) conflictCard(cx *gk.Cx) gk.DivEl {
 		Child(gk.Div(s.FontSemibold).TextColor(rgb(Warn)).Child(txt("Your edits don't fit the mixer's settings"))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Muted)).
 			Child(txt("They name channels the mixer no longer has. Reload the mixer's settings to continue editing."))).
-		Child(gk.Div().Child(gk.Button("reload").Primary().Rounded(float32(18)).Px(px(16)).
+		Child(gk.Div().Child(kit.Button("reload").Primary().Rounded(float32(18)).Px(px(16)).
 			Label("Reload mixer settings").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				a.session.ReloadSaved()

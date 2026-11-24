@@ -1,7 +1,7 @@
 //go:build mockmixer
 
 // Command uitest runs one offscreen UI test mode selected by RC2FX_UITEST
-// against the diagnostic gpuikit library, printing PASS/FAIL and exiting 0 or 1.
+// against the diagnostic goui-kit library, printing PASS/FAIL and exiting 0 or 1.
 // Invoked by uitest_test.go.
 package main
 
