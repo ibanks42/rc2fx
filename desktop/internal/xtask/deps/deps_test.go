@@ -106,7 +106,7 @@ func TestExtractTarZstKeepsFilesModesAndLinks(t *testing.T) {
 }
 
 func TestExtractRefusesEntriesOutsideTheDestination(t *testing.T) {
-	for _, name := range []string{"../escape", "a/../../escape", "/abs"} {
+	for _, name := range []string{"../escape", "a/../../escape", "/abs", `\abs`, `..\escape`, "C:/abs"} {
 		dir := t.TempDir()
 		archive := filepath.Join(dir, "a.tar.zst")
 		writeTarZst(t, archive, []entry{{name: name, body: "x", mode: 0o644}})
@@ -119,11 +119,13 @@ func TestExtractRefusesEntriesOutsideTheDestination(t *testing.T) {
 			t.Errorf("zip entry %q was unpacked", name)
 		}
 	}
-	dir := t.TempDir()
-	archive := filepath.Join(dir, "a.tar.zst")
-	writeTarZst(t, archive, []entry{{name: "pkg/link", link: "../../outside", mode: 0o777}})
-	if err := extractTarZst(archive, filepath.Join(dir, "x")); err == nil {
-		t.Error("a link leaving the archive was unpacked")
+	for _, link := range []string{"../../outside", "/outside", `\outside`, "C:/outside"} {
+		dir := t.TempDir()
+		archive := filepath.Join(dir, "a.tar.zst")
+		writeTarZst(t, archive, []entry{{name: "pkg/link", link: link, mode: 0o777}})
+		if err := extractTarZst(archive, filepath.Join(dir, "x")); err == nil {
+			t.Errorf("link to %q was unpacked", link)
+		}
 	}
 }
 

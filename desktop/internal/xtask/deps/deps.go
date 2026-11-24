@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -116,13 +117,16 @@ func downloadOnce(client *http.Client, url, path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// inside joins name onto dir, refusing names that leave dir.
+// inside joins name onto dir, refusing names that leave dir. Archive names
+// use forward slashes, so a backslash or a drive letter is refused on every
+// OS; IsLocal also refuses rooted names such as \abs, which IsAbs accepts
+// on Windows.
 func inside(dir, name string) (string, error) {
-	clean := filepath.Clean(filepath.FromSlash(name))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.VolumeName(clean) != "" {
+	local := filepath.FromSlash(name)
+	if strings.ContainsAny(name, `\:`) || !filepath.IsLocal(local) {
 		return "", fmt.Errorf("archive entry %q leaves the destination", name)
 	}
-	return filepath.Join(dir, clean), nil
+	return filepath.Join(dir, local), nil
 }
 
 func writeFile(path string, mode os.FileMode, r io.Reader) error {
@@ -175,8 +179,10 @@ func extractTarZst(archive, dir string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			target := filepath.Join(filepath.Dir(header.Name), header.Linkname)
-			if filepath.IsAbs(header.Linkname) {
+			target := slashpath.Join(slashpath.Dir(header.Name), header.Linkname)
+			// Join drops a leading slash, so a rooted link is refused here.
+			link := header.Linkname
+			if strings.HasPrefix(link, "/") || strings.ContainsAny(link, `\:`) {
 				return fmt.Errorf("archive entry %q links outside the archive", header.Name)
 			}
 			if _, err := inside(dir, target); err != nil {
