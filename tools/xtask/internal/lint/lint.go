@@ -68,7 +68,7 @@ func Run(args []string) error {
 		return err
 	}
 	strict := os.Getenv("CI") != ""
-	var failed, skipped []string
+	var checked, failed, skipped []string
 	for _, lang := range languages {
 		var selected []string
 		for _, name := range files {
@@ -83,6 +83,7 @@ func Run(args []string) error {
 		var missing missingTool
 		switch {
 		case err == nil:
+			checked = append(checked, fmt.Sprintf("%s (%d)", lang.name, len(selected)))
 		case asMissing(err, &missing) && !strict:
 			fmt.Fprintf(os.Stderr, "lint: skipping %s: %s\n", lang.name, missing.err)
 			skipped = append(skipped, lang.name)
@@ -100,6 +101,12 @@ func Run(args []string) error {
 	}
 	if len(skipped) > 0 {
 		fmt.Fprintf(os.Stderr, "lint: passed, but skipped %s (tools not installed)\n", strings.Join(skipped, ", "))
+	} else if len(checked) > 0 {
+		verb := "checked"
+		if o.fix {
+			verb = "formatted"
+		}
+		fmt.Printf("lint: %s %s\n", verb, strings.Join(checked, ", "))
 	}
 	return nil
 }
@@ -237,8 +244,8 @@ func runPython(o options, files []string) error {
 	if err != nil {
 		return err
 	}
-	format := []string{"format", "--no-cache"}
-	lint := []string{"check", "--no-cache"}
+	format := []string{"format", "--no-cache", "--quiet"}
+	lint := []string{"check", "--no-cache", "--quiet"}
 	if o.fix {
 		lint = append(lint, "--fix")
 	} else {
