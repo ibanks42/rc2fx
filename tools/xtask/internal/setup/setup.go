@@ -22,6 +22,7 @@ import (
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/deps"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/elfcheck"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/task"
+	"github.com/ibanks42/rc2fx/tools/xtask/internal/toolpins"
 )
 
 // Target is the mixer's Rust target.
@@ -43,6 +44,9 @@ func Run() error {
 	}
 	fmt.Printf("Adding the Rust %s target\n", Target)
 	if err := task.Run(exec.Command("rustup", "target", "add", Target)); err != nil {
+		return err
+	}
+	if err := installPinnedTools(task.Root()); err != nil {
 		return err
 	}
 	if !succeeds(exec.Command("cargo-zigbuild", "--version")) {
@@ -67,18 +71,16 @@ func succeeds(command *exec.Cmd) bool {
 	return command.Run() == nil
 }
 
-// CheckZig requires zig on PATH and says which one is used.
+// CheckZig requires the zig mise.toml pins (or another on PATH) and says
+// which one is used.
 func CheckZig() error {
-	output, err := exec.Command("zig", "version").Output()
-	if err == nil {
-		fmt.Printf("Using zig %s\n", strings.TrimSpace(strings.ToValidUTF8(string(output), "�")))
-		return nil
+	zig, err := toolpins.Find(toolpins.Zig)
+	if err != nil {
+		return err
 	}
-	return task.Error("zig is not on PATH. Install it (0.13 or newer), then rerun setup:\n  " +
-		"Windows: scoop install zig   or   winget install zig.zig\n  " +
-		"macOS:   brew install zig\n  " +
-		"Linux:   snap install zig --classic --beta, your package manager, or pip install ziglang\n  " +
-		"https://ziglang.org/download/")
+	output, _ := exec.Command(zig, "version").Output()
+	fmt.Printf("Using zig %s\n", strings.TrimSpace(strings.ToValidUTF8(string(output), "\uFFFD")))
+	return nil
 }
 
 // MixerRustflags is the mixer's RUSTFLAGS: code generation for its

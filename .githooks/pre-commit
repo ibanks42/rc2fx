@@ -1,4 +1,4 @@
 #!/bin/sh
-# Formatting checks before each commit; see `go -C tools/xtask run . pre-commit`.
+# Formatting checks before each commit; see `go -C tools/xtask run . lint`.
 # Enabled by `just setup`; skip once with `git commit --no-verify`.
-exec go -C tools/xtask run . pre-commit
+exec go -C tools/xtask run . lint --staged

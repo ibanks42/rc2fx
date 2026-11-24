@@ -46,8 +46,9 @@ jobs:
           cache-dependency-path: |
             desktop/go.sum
             tools/xtask/go.sum
-      - name: Set up verified Zig
-        run: go -C tools/xtask run . fetch-zig "$RUNNER_TEMP/rc2fx-tools"
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          install_args: zig
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2
         with:
           tool: cargo-zigbuild@0.24.0,cargo-about@0.8.4

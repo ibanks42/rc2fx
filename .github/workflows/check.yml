@@ -65,12 +65,6 @@ jobs:
           workspaces: |
             . -> target
             crates/rc2fx-bench -> target
-      # `--all` covers the workspace only; standalone workspaces are checked by name.
-      - name: Check formatting
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
-          cargo fmt --all --manifest-path tools/src_fast_check/Cargo.toml -- --check
       # Share cargo-ci.toml across steps so build scripts and proc-macros aren't rebuilt.
       - name: Lint the workspace
         run: |
@@ -119,6 +113,35 @@ jobs:
       # The bench-kernels arm of the NEON code.
       - name: Lint the bench-kernels feature
         run: cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
+
+  # Formatting and lints for every language (go -C tools/xtask run . lint),
+  # with the tools mise.toml pins.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: |
+            desktop/go.sum
+            tools/xtask/go.sum
+      # rustfmt from rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+          cache: false
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          install_args: ruff shellcheck shfmt actionlint conda:clang-format
+      - name: Check formatting and lints
+        run: go -C tools/xtask run . lint
 
   # Host-side release, docs, mixer script, and C module tests.
   tooling:
@@ -206,13 +229,9 @@ jobs:
             ${{ steps.go-cache.outputs.build }}
           key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum', 'tools/xtask/go.sum') }}
           restore-keys: go-desktop-${{ runner.os }}-
-      # -e includes UI packages even without goui-kit installed; gofmt doesn't need their imports.
-      - name: Check formatting and schema
+      - name: Check the generated schema files
         if: runner.os == 'Linux'
-        run: |
-          unformatted=$({ go list -e -f '{{.Dir}}' ./...; go -C ../tools/xtask list -e -f '{{.Dir}}' ./...; } | xargs gofmt -l)
-          test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
-          go -C ../tools/xtask run . schema --check
+        run: go -C ../tools/xtask run . schema --check
       - name: List everything but the UI
         run: go -C ../tools/xtask run . non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI

@@ -423,7 +423,7 @@ func Run(args []string) error {
 	// always links the newest release.
 	name := fmt.Sprintf("rc2fx-%s-%s", system, arch)
 	if system == "linux" {
-		tools, err := toolsFromEnv(root)
+		tools, err := toolsFromEnv()
 		if err != nil {
 			return err
 		}

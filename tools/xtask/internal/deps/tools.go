@@ -1,7 +1,6 @@
 package deps
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,29 +9,6 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/task"
-)
-
-// pinnedTool is a download checked against a SHA-256 before it is used.
-type pinnedTool struct {
-	version, url, sha256 string
-}
-
-var (
-	linuxdeployPin = pinnedTool{
-		version: "1-alpha-20251107-1",
-		url:     "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage",
-		sha256:  "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d",
-	}
-	patchelfPin = pinnedTool{
-		version: "0.19.3",
-		url:     "https://github.com/NixOS/patchelf/releases/download/0.19.3/patchelf-0.19.3-x86_64.tar.gz",
-		sha256:  "38861b171079e440b25ac86483284f690d0ee7921dba98b0c8fe04a9b0a11667",
-	}
-	zigPin = pinnedTool{
-		version: "0.16.0",
-		url:     "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
-		sha256:  "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
-	}
 )
 
 // ToolsDir is where `go -C tools/xtask run . setup` installs the packaging tools:
@@ -69,24 +45,6 @@ func installedVPK(tools string) string {
 	return existingFile(filepath.Join(VPKDir(tools), "bin", name))
 }
 
-// LocalLinuxdeploy returns the path to the linuxdeploy installed by setup, or "" if it is missing.
-func LocalLinuxdeploy(root string) string {
-	return linuxdeployPath(ToolsDir(root))
-}
-
-func linuxdeployPath(tools string) string {
-	return existingFile(filepath.Join(tools, "appimage", "linuxdeploy", "AppRun"))
-}
-
-// LocalPatchelf returns the path to the patchelf installed by setup, or "" if it is missing.
-func LocalPatchelf(root string) string {
-	return patchelfPath(ToolsDir(root))
-}
-
-func patchelfPath(tools string) string {
-	return existingFile(filepath.Join(tools, "appimage", "patchelf-"+patchelfPin.version, "bin", "patchelf"))
-}
-
 func existingFile(path string) string {
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 		return path
@@ -98,132 +56,6 @@ func existingFile(path string) string {
 func stamped(dir, sha string) bool {
 	stamp, err := os.ReadFile(filepath.Join(dir, stampName))
 	return err == nil && strings.TrimSpace(string(stamp)) == sha
-}
-
-// install fills dest from a fresh download: fill gets the verified
-// download and an empty folder to unpack it into, which then replaces dest
-// with a stamp of the download's SHA-256.
-func install(tools, dest string, pin pinnedTool, fill func(download, out string) error) error {
-	if err := os.MkdirAll(tools, 0o777); err != nil {
-		return task.Error(task.IOError(err))
-	}
-	stage, err := os.MkdirTemp(tools, ".fetch.")
-	if err != nil {
-		return task.Error(task.IOError(err))
-	}
-	defer os.RemoveAll(stage)
-	file := filepath.Join(stage, filepath.Base(pin.url))
-	if err := download(pin.url, file, pin.sha256); err != nil {
-		return err
-	}
-	out := filepath.Join(stage, "out")
-	if err := os.Mkdir(out, 0o777); err != nil {
-		return task.Error(task.IOError(err))
-	}
-	if err := fill(file, out); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(out, stampName), []byte(pin.sha256+"\n"), 0o644); err != nil {
-		return task.Error(task.IOError(err))
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o777); err != nil {
-		return task.Error(task.IOError(err))
-	}
-	if err := os.RemoveAll(dest); err != nil {
-		return task.Errorf("%s: %s", dest, task.IOError(err))
-	}
-	if err := os.Rename(out, dest); err != nil {
-		return task.Errorf("%s: %s", dest, task.IOError(err))
-	}
-	return nil
-}
-
-// AppImageTools are the linuxdeploy and patchelf FetchAppImageTools
-// installed.
-type AppImageTools struct {
-	Linuxdeploy, Patchelf string
-}
-
-// FetchAppImageTools installs the pinned linuxdeploy and patchelf for x86-64
-// Linux into tools (default: ToolsDir), skipping what is already there.
-func FetchAppImageTools(tools string) (AppImageTools, error) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return AppImageTools{}, task.Error("the AppImage tools run on x86-64 Linux only")
-	}
-	tools = toolsDir(tools)
-	linuxdeploy := filepath.Join(tools, "appimage", "linuxdeploy")
-	if linuxdeployPath(tools) == "" || !stamped(linuxdeploy, linuxdeployPin.sha256) {
-		fmt.Printf("Installing linuxdeploy %s\n", linuxdeployPin.version)
-		err := install(tools, linuxdeploy, linuxdeployPin, func(download, out string) error {
-			if err := os.Chmod(download, 0o755); err != nil {
-				return task.Error(task.IOError(err))
-			}
-			// The AppImage unpacks itself into squashfs-root beside it.
-			extract := exec.Command(download, "--appimage-extract")
-			extract.Dir = filepath.Dir(download)
-			var output bytes.Buffer
-			extract.Stdout, extract.Stderr = &output, &output
-			if err := extract.Run(); err != nil {
-				return task.Errorf("could not unpack linuxdeploy: %s\n%s", err, output.String())
-			}
-			if err := os.Remove(out); err != nil {
-				return task.Error(task.IOError(err))
-			}
-			return os.Rename(filepath.Join(filepath.Dir(download), "squashfs-root"), out)
-		})
-		if err != nil {
-			return AppImageTools{}, err
-		}
-	}
-	patchelf := filepath.Join(tools, "appimage", "patchelf-"+patchelfPin.version)
-	if patchelfPath(tools) == "" || !stamped(patchelf, patchelfPin.sha256) {
-		fmt.Printf("Installing patchelf %s\n", patchelfPin.version)
-		err := install(tools, patchelf, patchelfPin, func(download, out string) error {
-			if err := extractTarGz(download, out); err != nil {
-				return task.Errorf("%s: %s", filepath.Base(download), err)
-			}
-			return nil
-		})
-		if err != nil {
-			return AppImageTools{}, err
-		}
-	}
-	result := AppImageTools{Linuxdeploy: linuxdeployPath(tools), Patchelf: patchelfPath(tools)}
-	if result.Linuxdeploy == "" || result.Patchelf == "" {
-		return AppImageTools{}, task.Errorf("the AppImage tools are incomplete in %s", tools)
-	}
-	fmt.Printf("AppImage tools ready in %s\n", filepath.Join(tools, "appimage"))
-	return result, nil
-}
-
-// FetchZig installs the pinned zig for x86-64 Linux into tools (default:
-// ToolsDir) and returns its folder. In a GitHub workflow it also puts that
-// folder on the PATH of later steps.
-func FetchZig(tools string) (string, error) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return "", task.Error("the pinned zig download is for x86-64 Linux only")
-	}
-	tools = toolsDir(tools)
-	dest := filepath.Join(tools, "zig-"+zigPin.version)
-	if existingFile(filepath.Join(dest, "zig")) == "" || !stamped(dest, zigPin.sha256) {
-		fmt.Printf("Installing zig %s\n", zigPin.version)
-		err := install(tools, dest, zigPin, func(download, out string) error {
-			// Go has no xz reader; every Linux system this runs on has tar and xz.
-			return task.Run(exec.Command("tar", "-xJf", download, "--strip-components=1", "-C", out))
-		})
-		if err != nil {
-			return "", err
-		}
-	}
-	version, err := exec.Command(filepath.Join(dest, "zig"), "version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != zigPin.version {
-		return "", task.Errorf("%s does not report zig %s", dest, zigPin.version)
-	}
-	if err := appendGitHubFile("GITHUB_PATH", dest); err != nil {
-		return "", err
-	}
-	fmt.Printf("Zig ready: %s\n", dest)
-	return dest, nil
 }
 
 // FetchVPK installs Velopack's vpk at the version and SHA-256 pinned in
@@ -305,25 +137,4 @@ func VPKPackage(tools string) (string, error) {
 		return "", task.Errorf("expected one vpk package in %s; run `go -C tools/xtask run . fetch-vpk`", filepath.Join(VPKDir(toolsDir(tools)), "source"))
 	}
 	return matches[0], nil
-}
-
-// appendGitHubFile appends line to the workflow file a GitHub Actions
-// variable such as GITHUB_PATH names, and does nothing outside a workflow.
-func appendGitHubFile(variable, line string) error {
-	path := os.Getenv(variable)
-	if path == "" {
-		return nil
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		return task.Errorf("%s: %s", variable, task.IOError(err))
-	}
-	_, err = fmt.Fprintln(file, line)
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return task.Errorf("%s: %s", variable, task.IOError(err))
-	}
-	return nil
 }
