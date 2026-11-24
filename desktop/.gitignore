@@ -3,7 +3,7 @@
 /third_party/goui-kit-diag
 /third_party/.fetch-goui-kit.*
 /bin/
-# Velopack's C library, from ./xtask fetch-velopack; never committed.
+# Velopack's C library, from go -C tools/xtask run . fetch-velopack; never committed.
 /third_party/velopack/
-# Packaging tools from ./xtask setup; never committed.
+# Packaging tools from go -C tools/xtask run . setup; never committed.
 /third_party/tools/

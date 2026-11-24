@@ -1,10 +1,12 @@
 # Building from source
 
 These instructions cover building both the desktop app and the mixer runtime on
-Windows, Linux, or macOS. Every build step runs through `./xtask` (the Go tool
-in `desktop/cmd/xtask`), with `just` providing short wrappers, so the workflow
-is identical across platforms. The desktop app is written in Go; the mixer
-runtime is written in Rust.
+Windows, Linux, or macOS. Every build step runs through the Go tool in
+`tools/xtask` (`go -C tools/xtask run . <command>`), with `just` providing
+short wrappers, so the workflow is identical across platforms. Because
+`tools/xtask` is its own Go module, tasks run on a fresh clone before goui-kit
+is downloaded, and the desktop module under `desktop/` builds on its own. The
+desktop app is written in Go; the mixer runtime is written in Rust.
 
 All Rust crates target Linux only: AArch64 for the mixer itself, and Linux
 hosts for running the Rust test suite. On Windows and macOS, `just mixer-build`
@@ -13,8 +15,8 @@ the Rust tests won't run locally.
 
 ## 1. Install the tools
 
-- [Go](https://go.dev/dl/) at the version listed in `desktop/go.mod`. `./xtask`
-  runs via `go run`, so every task depends on it.
+- [Go](https://go.dev/dl/) at the version listed in `desktop/go.mod`. Project
+  tasks run via `go -C tools/xtask run .`, so every task depends on it.
 - Rust via [rustup](https://rustup.rs), needed for the mixer runtime and for
   collecting mixer crate license notices during `just package`. The toolchain
   version is pinned in `rust-toolchain.toml` and installs automatically on
@@ -26,6 +28,8 @@ the Rust tests won't run locally.
   `brew install zig`, `pip install ziglang`, or your package manager. Zig acts
   as the C compiler and linker for the mixer build, targeting the mixer's
   glibc 2.35 directly with no separate sysroot.
+- [.NET SDK](https://dotnet.microsoft.com/download) 8 or newer, needed by
+  `just setup` and `just package` to install and run Velopack's `vpk`.
 - A C compiler for the desktop app's cgo dependencies (the UI and storage
   repair libraries):
   - **Windows:** MinGW-w64 gcc on `PATH` (for example via
@@ -41,47 +45,53 @@ Once those are installed, run the following from the repository root:
 just setup
 ```
 
-`just setup` installs the mixer's Rust target (`aarch64-unknown-linux-gnu`),
-installs `cargo-zigbuild`, verifies `zig` is on `PATH`, downloads the pinned
-goui-kit static library and Velopack's C library for your platform, and
-activates the pre-commit hook in `.githooks`. Running `just setup` again skips
-the goui-kit download if it is already current.
+`just setup` installs everything needed to build, package, and run the desktop
+app and to build the mixer runtime: it downloads the pinned goui-kit static
+library and Velopack's C library for your platform, adds the mixer's Rust
+target (`aarch64-unknown-linux-gnu`), installs `cargo-zigbuild` and
+`cargo-about` 0.8.4, checks that `zig` is on `PATH`, installs the pinned `vpk`
+into `desktop/third_party/tools/rc2fx-vpk`, and activates the pre-commit
+formatting hook in `.githooks`. On x86-64 Linux, it also installs the pinned
+`linuxdeploy` and `patchelf` into `desktop/third_party/tools/appimage`,
+installs `mksquashfs` via your system package manager (with `sudo`) when
+missing, and generates the AppImage runtime notices and source archive. Running
+`just setup` again skips downloads and tools that are already current.
 
 For CI or fetching another platform's build, run
-`./xtask fetch-goui-kit TARGET` (for example
-`./xtask fetch-goui-kit darwin-universal`; omit `TARGET` for the current
-machine). It downloads the goui-kit static library (Go bindings for GPUI-kit)
-pinned in `config/goui-kit.json`, verifies its SHA-256, and unpacks it to
-`desktop/third_party/goui-kit` (gitignored). Building with `-tags gkstatic`
+`go -C tools/xtask run . fetch-goui-kit TARGET` (for example
+`go -C tools/xtask run . fetch-goui-kit darwin-universal`; omit `TARGET` for the
+current machine). It downloads the goui-kit static library (Go bindings for
+GPUI-kit) pinned in `config/goui-kit.json`, verifies its SHA-256, and unpacks
+it to `desktop/third_party/goui-kit` (gitignored). Building with `-tags gkstatic`
 selects `lib/libgouikit_static.a` so nothing ships alongside the executable;
 without it, package `gk` looks for the shared library at runtime. If you're
 working with a local build of goui-kit, symlink it instead:
 `ln -sfn /path/to/goui-kit-VERSION-OS-ARCH desktop/third_party/goui-kit`
-(re-running `just setup` or `./xtask fetch-goui-kit` replaces a symlink with
-the downloaded archive). Only the UI packages need goui-kit; tests for every
-other package run without it.
+(re-running `just setup` or `go -C tools/xtask run . fetch-goui-kit` replaces a
+symlink with the downloaded archive). Only the UI packages need goui-kit; tests
+for every other package run without it.
 
 ## 2. Build and test
 
 ```sh
 just app           # run the desktop app (development build; `just app-release` for release)
-just test          # Go vet and tests for the desktop app, then (on Linux) the Rust workspace tests and Clippy
+just test          # Go formatting, vet, and tests for the desktop app and tools/xtask, then (on Linux) the Rust workspace tests and Clippy
 just test-mixer    # mixer-side tests (Linux, with python3 and a C compiler)
 ```
 
 `just app` doesn't need a mixer cross-build because normal builds download
-signed mixer releases. It invokes `./xtask app`, which compiles a development
-build (using the `rc2fxdev` Go build tag, analogous to a Rust debug build) into
-`target/debug` and launches it.
+signed mixer releases. It invokes `go -C tools/xtask run . app`, which compiles a
+development build (using the `rc2fxdev` Go build tag, analogous to a Rust debug
+build) into `target/debug` and launches it.
 
 Every build of the app passes a linker flag to strip unused goui-kit component
 families (`-extldflags=-Wl,--gc-sections`, or `-Wl,-dead_strip` on macOS). On
 Windows this requires LLVM's linker, so release builds link with `-fuse-ld=lld`
 (requiring `ld.lld` on `PATH` alongside MinGW's gcc) and
 `-Xlink=-force:multipleres` so the application manifest embedded by package
-`gk` wins over MinGW's default one. `./xtask` sets these flags automatically; a
-raw `go build -tags gkstatic` still works without them, just with every
-component family linked in.
+`gk` wins over MinGW's default one. `go -C tools/xtask run .` sets these flags
+automatically; a raw `go build -tags gkstatic` still works without them, just
+with every component family linked in.
 
 `just test` and the `*-embedded` recipes run `just mixer-build` first, which
 cross-compiles the mixer runtime into `target/mixer` locally without touching a
@@ -102,8 +112,8 @@ and matching the configuration measured on hardware. Installing and running a
 source build works the same as described in the
 [user guide](../user/installing.md).
 
-`just test` fails on any Clippy warning, `go vet` issue, or unformatted Go
-file, even if all tests pass. On Linux it also lints the `bench-kernels`
+`just test` checks `desktop/` and `tools/xtask/`, and fails on any Clippy
+warning, `go vet` issue, or unformatted Go file, even if all tests pass. On Linux it also lints the `bench-kernels`
 feature; on Windows and macOS it runs only the Go checks
 (`just test-rust` runs the Rust checks by themselves on Linux). The Rust
 workspace tests invoke `go run ./internal/interop` to verify Rust/Go wire
@@ -136,8 +146,8 @@ SHA-256. The unpacked app remains in `target/package/rc2fx-OS-ARCH/rc2fx`. See
 is not included in the packages.
 
 On macOS, the app ships as a universal binary targeting macOS 13 (the oldest
-version supported by Go 1.27) and newer. `./xtask package` compiles `cmd/rc2fx`
-twice with cgo for `arm64` and `amd64` (passing `-arch` and
+version supported by Go 1.27) and newer. `go -C tools/xtask run . package` compiles
+`cmd/rc2fx` twice with cgo for `arm64` and `amd64` (passing `-arch` and
 `-mmacosx-version-min=13.0` via `CC`, `CGO_CFLAGS`, and `CGO_LDFLAGS`) against
 the universal goui-kit library and each architecture's static `velopack_libc`,
 then merges them with `lipo -create` (overridable via `RC2FX_LIPO`). It then
@@ -152,55 +162,58 @@ bundles the same `UpdateMac` either way, and the channel (`osx`) and feed names
 stay the same, so users on earlier Apple silicon-only builds update
 seamlessly.
 
-Packaging requires the goui-kit download, Velopack's C library, and
-`cargo-about` (`cargo install --locked cargo-about`):
+`just setup` installs all of the libraries and tools packaging needs, so you do
+not have to install them by hand:
 
-- `just setup` downloads and verifies Velopack's C library into
-  `desktop/third_party/velopack` (you can also run
-  `./xtask fetch-velopack TARGET` in CI or to fetch another platform's
-  build). Packaged builds enable the `velopack` build tag so self-updates
-  work (and `embedded` as well when `--embedded` is passed).
-- `cargo-about` gathers licenses for the mixer's Rust crates, which are merged
-  with the Go module and goui-kit notices.
-- Every platform needs .NET and `vpk` `1.3.39-g8d2844f`:
-  `dotnet tool install -g vpk --version 1.3.39-g8d2844f`. Put `vpk` on `PATH`
-  or point `RC2FX_VPK` at it. CI release builds install a checksummed copy via
-  `.github/scripts/setup-vpk.sh`. On Windows, release builds
+- **Libraries:** `just setup` downloads and verifies goui-kit and Velopack's C
+  library into `desktop/third_party/goui-kit` and
+  `desktop/third_party/velopack` (for CI or another platform, run
+  `go -C tools/xtask run . fetch-goui-kit TARGET` or
+  `go -C tools/xtask run . fetch-velopack TARGET`). Packaged builds enable the
+  `velopack` build tag so self-updates work (and `embedded` as well when
+  `--embedded` is passed).
+- **License notices:** `just setup` installs `cargo-about` 0.8.4, which gathers
+  licenses for the mixer's Rust crates to merge with the Go module and goui-kit
+  notices. Because packages ship Velopack's launcher, updater, and installer,
+  the app's notices also pull in Velopack's dependencies from
+  `licenses/velopack-VERSION.json`. Whenever you bump Velopack in
+  `config/velopack.json` (shared by `go -C tools/xtask run . fetch-vpk`,
+  `go -C tools/xtask run . fetch-velopack`, and packaging), regenerate that report
+  with `.github/scripts/velopack-licenses.py VERSION`; packaging rejects
+  mismatched reports.
+- **Velopack (`vpk`):** `just setup` (or `go -C tools/xtask run . fetch-vpk` on its
+  own) installs the pinned `vpk` (`1.3.39-g8d2844f`, requiring the .NET SDK)
+  into `desktop/third_party/tools/rc2fx-vpk`, where packaging finds it
+  automatically when `RC2FX_VPK` is unset. On Windows, release builds
   (`RC2FX_RELEASE_BUILD=1`) also require MinGW-w64's `windres`
   (`RC2FX_WINDRES`, or `x86_64-w64-mingw32-windres` / `windres` on `PATH`) to
   embed the icon and version metadata in `rc2fx.exe`; non-release builds skip
   resources if `windres` is absent.
-- Because packages ship Velopack's launcher, updater, and installer, the app's
-  license notices also pull in Velopack's dependencies from
-  `licenses/velopack-VERSION.json`. Whenever you bump Velopack in
-  `config/velopack.json` (shared by `vpk`, `./xtask fetch-velopack`, and
-  packaging), regenerate that report with
-  `.github/scripts/velopack-licenses.py VERSION`; packaging rejects mismatched
-  reports.
-- Linux additionally requires `mksquashfs` (from `squashfs-tools`) on `PATH`,
-  plus absolute paths to `linuxdeploy` and `patchelf` in `RC2FX_LINUXDEPLOY`
-  and `RC2FX_PATCHELF`. Running
-  `bash .github/scripts/setup-release-tools.sh appimage` downloads and verifies
-  pinned copies into `~/.cache/rc2fx-release-tools/appimage`. Since `vpk`
-  prepends its own AppImage runtime, you don't need a separate runtime or
-  `appimagetool`. Before packaging on Linux, run
-  `python3 .github/scripts/prepare-appimage-notices.py` to generate the
-  runtime's license notices (required by packaging) and its source archive (see
-  [AppImage runtime sources](releases.md#appimage-runtime-sources)).
-- An AppImage requires at least the glibc version it was built against. Release
-  builds run inside the AlmaLinux 8 container described
-  [below](#check-the-linux-packages-before-a-release) (glibc 2.28). Packaging
-  directly on a newer Linux host produces an AppImage tied to that host's
-  glibc.
+- **Linux AppImage tools and notices:** On x86-64 Linux, `just setup` installs
+  the pinned `linuxdeploy` and `patchelf` into
+  `desktop/third_party/tools/appimage` (also available via
+  `go -C tools/xtask run . fetch-appimage-tools`), installs `mksquashfs` via your
+  system package manager if it is missing, and runs
+  `.github/scripts/prepare-appimage-notices.py` to generate the AppImage
+  runtime's license notices and source archive (see
+  [AppImage runtime sources](releases.md#appimage-runtime-sources)). Packaging
+  uses the installed `linuxdeploy` and `patchelf` automatically when
+  `RC2FX_LINUXDEPLOY` and `RC2FX_PATCHELF` are unset. Since `vpk` prepends its
+  own AppImage runtime, you don't need a separate runtime or `appimagetool`.
+- **glibc compatibility:** An AppImage requires at least the glibc version it
+  was built against. Release builds run inside the AlmaLinux 8 container
+  described [below](#check-the-linux-packages-before-a-release) (glibc 2.28).
+  Packaging directly on a newer Linux host produces an AppImage tied to that
+  host's glibc.
 
 Each platform is packaged natively on its own OS; see
 [Releases](releases.md#per-platform-build-runners) for why.
 
 Local Windows and macOS packages are unsigned unless you configure the signing
 variables documented in [Signing](releases.md#signing); Linux AppImages are not
-signed by vpk. `./xtask package --build-only` stops after compilation, and
-`--skip-build` packages a previously built release binary (the Windows release
-job uses these two flags to authenticate to Azure in between).
+signed by vpk. `go -C tools/xtask run . package --build-only` stops after
+compilation, and `--skip-build` packages a previously built release binary (the
+Windows release job uses these two flags to authenticate to Azure in between).
 
 ### Check the Linux packages before a release
 

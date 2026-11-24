@@ -51,10 +51,10 @@ See [Architecture](architecture.md) for how all the pieces fit together.
 | `crates/rc2fx-bench` | Benchmarks suppression models directly on the mixer |
 | `mixer/gui` | `librc2fx_gui.so` (C), loaded into RØDE's screen program to convert only changed screen regions and reduce audio interference from redraws |
 | `mixer/jackerr` | `librc2fx_jackerr.so` and `rc2fx_jackerr_snapshot` (C), the `jackd` error recorder and snapshot reader |
-| `xtask`, `desktop/cmd/xtask` | Build, deploy, and packaging tasks. `./xtask` at the root invokes the Go tool in `desktop/cmd/xtask` and `desktop/internal/xtask`. |
 | `mixer/scripts` | Launcher, shims, and installer scripts that run on the mixer, with tests in `mixer/scripts/tests` |
-| `schema/` | Shared wire schema definitions (`schema/core.go`, `schema/payload.go`) generated into both Rust and Go via `./xtask schema` |
+| `schema/` | Shared wire schema definitions (`schema/core.go`, `schema/payload.go`) generated into both Rust and Go via `just schema` (`go -C tools/xtask run . schema`) |
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
+| `tools/xtask` | Build, deploy, and packaging tasks (`github.com/ibanks42/rc2fx/tools/xtask`), run via `just` or `go -C tools/xtask run . <command>` |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX relies on |
 | `tools/src_fast_check` | Compares the library's sample-rate converter (`src_fast_core.rs`) against real libsamplerate on AArch64 or under qemu |
 | `experiments/` | Unfinished work outside the main build (currently the on-screen panel) |
@@ -71,8 +71,8 @@ Rust; the desktop app lives in the Go module under `desktop/`.
 - [Linux setup](linux.md): system packages for Debian/Ubuntu, Fedora, and Arch.
 - [Working on a mixer](mixer-workflow.md): enabling SSH from the app and
   deploying builds to a mixer over SSH without reflashing.
-- [Commands](commands.md): reference for all `just` recipes and `./xtask`
-  commands.
+- [Commands](commands.md): reference for all `just` recipes and
+  `go -C tools/xtask run .` commands.
 - [Architecture](architecture.md): startup flow, fallback to stock, and how
   settings are applied.
 - [The desktop app in Go](desktop-go.md): Go packages, naming conventions,

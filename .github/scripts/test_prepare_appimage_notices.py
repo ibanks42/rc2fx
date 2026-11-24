@@ -3,6 +3,7 @@
 
 import importlib.util
 import io
+import json
 import re
 import subprocess
 import tarfile
@@ -189,31 +190,22 @@ class Runtime(unittest.TestCase):
             with self.assertRaises(notices.Failure):
                 notices.vendored_runtime(path, None)
 
-    def test_the_pins_agree_with_setup_vpk(self):
+    def test_the_pins_agree_with_fetch_vpk(self):
         root = SCRIPT.parent.parent.parent
         config = root / "config/velopack.json"
         self.assertTrue(config.is_file(), "config/velopack.json is missing")
-        setup = SCRIPT.with_name("setup-vpk.sh").read_text()
-        self.assertIn("config/velopack.json", setup)
-        # Ensure setup-vpk.sh's sed extractor reads the same pins.
-        extracted = subprocess.check_output(
-            [
-                "bash",
-                "-c",
-                f'velopack_config={config}; '
-                'sed -n "s/^[[:space:]]*\\"version\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1; '
-                'sed -n "s/^[[:space:]]*\\"vpkSha256\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1',
-            ],
-            text=True,
-        ).splitlines()
-        self.assertEqual(extracted, [notices.VPK_VERSION, notices.VPK_SHA256])
+        fetch = (root / "tools/xtask/internal/deps/tools.go").read_text()
+        self.assertIn('"config", "velopack.json"', fetch)
+        self.assertIn('`json:"vpkSha256"`', fetch)
+        pins = json.loads(config.read_text())
+        self.assertEqual([pins["version"], pins["vpkSha256"]], [notices.VPK_VERSION, notices.VPK_SHA256])
 
     def test_the_app_links_the_velopack_that_vpk_packs_with(self):
-        # Packaging, ./xtask fetch-velopack, and prepare-appimage-notices.py all share config/velopack.json.
+        # Packaging, go -C tools/xtask run . fetch-velopack, and prepare-appimage-notices.py all share config/velopack.json.
         root = SCRIPT.parent.parent.parent
-        fetch = (root / "desktop/internal/xtask/deps/velopack.go").read_text()
+        fetch = (root / "tools/xtask/internal/deps/velopack.go").read_text()
         self.assertIn('"config", "velopack.json"', fetch)
-        licenses = (root / "desktop/internal/xtask/licenses/licenses.go").read_text()
+        licenses = (root / "tools/xtask/internal/licenses/licenses.go").read_text()
         self.assertIn("config", licenses)
         self.assertIn("velopack.json", licenses)
         self.assertTrue((root / f"licenses/velopack-{notices.VPK_VERSION}.json").is_file())

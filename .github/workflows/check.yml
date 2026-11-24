@@ -150,7 +150,7 @@ jobs:
           python3 .github/scripts/test_update_history.py
           python3 .github/scripts/test_mixer_version.py
           python3 .github/scripts/test_publish_mixer.py
-          # Also verifies vpk, ./xtask fetch-velopack, and the packager agree on the Velopack pin.
+          # Also verifies vpk, go -C tools/xtask run . fetch-velopack, and the packager agree on the Velopack pin.
           python3 .github/scripts/test_prepare_appimage_notices.py
       # gauge_binding.py skips here (no host rc2fx-native build); linux runs it.
       - name: Test the mixer scripts
@@ -204,17 +204,17 @@ jobs:
           path: |
             ${{ steps.go-cache.outputs.mod }}
             ${{ steps.go-cache.outputs.build }}
-          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum', 'tools/xtask/go.sum') }}
           restore-keys: go-desktop-${{ runner.os }}-
       # -e includes UI packages even without goui-kit installed; gofmt doesn't need their imports.
       - name: Check formatting and schema
         if: runner.os == 'Linux'
         run: |
-          unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
+          unformatted=$({ go list -e -f '{{.Dir}}' ./...; go -C ../tools/xtask list -e -f '{{.Dir}}' ./...; } | xargs gofmt -l)
           test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
-          ../xtask schema --check
+          go -C ../tools/xtask run . schema --check
       - name: List everything but the UI
-        run: ../xtask non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
+        run: go -C ../tools/xtask run . non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI
         run: |
           pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
@@ -231,26 +231,28 @@ jobs:
           # shellcheck disable=SC2086
           CGO_ENABLED=0 go vet -tags rc2fxdev,embedded $pkgs
           rm installer/embed/payload/rc2fx-payload.bin
-      - name: Test the xtask as ./xtask builds it
-        run: CGO_ENABLED=0 go test ./internal/xtask/... ./cmd/xtask
-      # Ensure cmd/xtask stays pure Go (no cgo or goui-kit dependencies) and the launcher works.
-      - name: Check xtask purity and launcher
+      - name: Vet and test the xtask as go -C tools/xtask run . builds it
+        working-directory: tools/xtask
+        run: |
+          CGO_ENABLED=0 go vet ./...
+          CGO_ENABLED=0 go test ./...
+      # Ensure tools/xtask stays pure Go (no cgo or goui-kit dependencies) and runs.
+      - name: Check that xtask is pure Go and runs
         if: runner.os == 'Linux'
         run: |
-          bad=$(CGO_ENABLED=0 go list -e -deps -f '{{if or .Error .DepsErrors .CgoFiles}}{{.ImportPath}}: {{.Error}}{{end}}' ./cmd/xtask)
-          gk=$(CGO_ENABLED=0 go list -e -deps -f '{{.ImportPath}}' ./cmd/xtask | grep '^github\.com/ibanks42/goui-kit' || true)
+          bad=$(CGO_ENABLED=0 go -C ../tools/xtask list -e -deps -f '{{if or .Error .DepsErrors .CgoFiles}}{{.ImportPath}}: {{.Error}}{{end}}' .)
+          gk=$(CGO_ENABLED=0 go -C ../tools/xtask list -e -deps -f '{{.ImportPath}}' . | grep '^github\.com/ibanks42/goui-kit' || true)
           if [ -n "$bad$gk" ]; then
-            printf 'cmd/xtask must build without cgo or goui-kit:\n%s\n%s\n' "$bad" "$gk" >&2
+            printf 'tools/xtask must build without cgo or goui-kit:\n%s\n%s\n' "$bad" "$gk" >&2
             exit 1
           fi
-          sh -n ../xtask
-          ../xtask help
+          go -C ../tools/xtask run . help
       # Velopack cgo bindings are shared by the selfupdate vet and UI link check.
       - name: Fetch and vet the Velopack bindings
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          ../xtask fetch-velopack "$TARGET"
+          go -C ../tools/xtask run . fetch-velopack "$TARGET"
           CGO_ENABLED=1 go vet -tags velopack ./app/selfupdate/...
       - name: Check for a goui-kit pin
         id: pin
@@ -277,7 +279,7 @@ jobs:
         if: steps.pin.outputs.ready == 'true'
         env:
           TARGET: ${{ matrix.target }}
-        run: ../xtask fetch-goui-kit "$TARGET"
+        run: go -C ../tools/xtask run . fetch-goui-kit "$TARGET"
       - name: Vet, build and test the UI
         if: steps.pin.outputs.ready == 'true'
         run: |
@@ -294,7 +296,7 @@ jobs:
           go vet -tags gkstatic,rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
           rm installer/embed/payload/rc2fx-payload.bin
           # Verify release link flags (including both slices on macOS).
-          ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-ui-check"
+          go -C ../tools/xtask run . check-ui-link "$RUNNER_TEMP/rc2fx-ui-check"
           # Package gk embeds the required Windows manifest in test binaries too.
           # Only test UI packages here; non-UI ./app/* subpackages already ran above.
           go test -tags gkstatic ./app ./cmd/rc2fx
@@ -319,7 +321,7 @@ jobs:
           path: |
             ${{ steps.go-cache.outputs.mod }}
             ${{ steps.go-cache.outputs.build }}
-          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum', 'tools/xtask/go.sum') }}
 
   # Build desktop cgo (UI + vendored libext2fs) inside the AlmaLinux 8 release
   # image to catch glibc 2.28 or container tool regressions before release.
@@ -360,11 +362,11 @@ jobs:
           key: go-desktop-alma-${{ hashFiles('desktop/go.sum', '.github/scripts/package-check.Containerfile') }}
           restore-keys: go-desktop-alma-
       - name: Fetch goui-kit
-        run: ../xtask fetch-goui-kit linux-amd64
+        run: go -C ../tools/xtask run . fetch-goui-kit linux-amd64
       - name: Fetch the Velopack C library
-        run: ../xtask fetch-velopack linux-amd64
+        run: go -C ../tools/xtask run . fetch-velopack linux-amd64
       - name: Build the app
-        run: ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-alma-check"
+        run: go -C ../tools/xtask run . check-ui-link "$RUNNER_TEMP/rc2fx-alma-check"
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
       - uses: actions/cache/save@v4.2.3

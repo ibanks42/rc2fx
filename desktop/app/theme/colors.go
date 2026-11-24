@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // Shared palette across all appearances. Cyan/violet indicate active

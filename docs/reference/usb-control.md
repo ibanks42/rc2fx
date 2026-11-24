@@ -86,7 +86,7 @@ go -C desktop run ./cmd/usb-probe --extended # also inputs, presets, diagnostics
 
 Pass `--write-roundtrip` to reapply the current settings unchanged with revision checking (this bumps the revision and won't retry on conflict).
 
-Unit tests cover fragmentation, malformed sizes, reordering, bounded decompression, stale sessions, unrelated vendor reports, ambiguous writes, reconnection, protocol 4 negotiation, windowed acks, and multi-report fetches. The xtask tests (`desktop/internal/xtask/mixer`) rebuild the staged descriptor and verify that RØDE's original items haven't changed.
+Unit tests cover fragmentation, malformed sizes, reordering, bounded decompression, stale sessions, unrelated vendor reports, ambiguous writes, reconnection, protocol 4 negotiation, windowed acks, and multi-report fetches. The xtask tests (`tools/xtask/internal/mixer`) rebuild the staged descriptor and verify that RØDE's original items haven't changed.
 
 ## Known quirks
 

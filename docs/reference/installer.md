@@ -212,7 +212,7 @@ mode.
 
 ## Release package
 
-`just package` (or `./xtask package`) builds release packages for the current
+`just package` (or `go -C tools/xtask run . package`) builds release packages for the current
 OS into `target/package` (see [packaging](../developer/building.md#3-package-it)):
 on Windows and macOS, an installer and the Velopack update package and feed; on
 Linux, an AppImage plus its update package and feed, all created by Velopack's

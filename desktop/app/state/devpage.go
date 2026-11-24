@@ -12,8 +12,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 type DevPageKind int

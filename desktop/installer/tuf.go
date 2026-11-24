@@ -1,7 +1,7 @@
 package installer
 
 // Shared TUF transport and metadata store helpers for mixer updates.
-// Verification itself lives in desktop/internal/tuf.
+// Verification itself lives in desktop/tuf.
 
 import (
 	"net/url"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/tuf"
 )
 
 func tufHTTP(metadataURL, targetsURL *url.URL, total time.Duration) tuf.Repository {

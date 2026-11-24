@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/common"
 )
 
 const (

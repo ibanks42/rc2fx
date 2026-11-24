@@ -11,8 +11,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/flash"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func allowedModels(allow bool) flash.Allowed {

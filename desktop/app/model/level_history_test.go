@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // Mirror of the 60 dB meter scale from package app so model tests stay UI-free.

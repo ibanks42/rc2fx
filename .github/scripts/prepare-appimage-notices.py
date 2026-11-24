@@ -40,7 +40,7 @@ RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
 # Commit reported by `--appimage-version` on the vendored runtime.
 RUNTIME_COMMIT = "3d17002ee2a519a288e28aeb7bc41af5f5adaf4e"
 RUNTIME_SHA256 = "a2419dce47568395ae79c01ffa9a5a341dd339581352ff104d073527543177e5"
-# Pinned vpk version/hash shared with setup-vpk.sh via config/velopack.json.
+# Pinned vpk version/hash shared with go -C tools/xtask run . fetch-vpk via config/velopack.json.
 _VELOPACK_CONFIG = json.loads(
     (Path(__file__).resolve().parents[2] / "config" / "velopack.json").read_text()
 )
@@ -448,7 +448,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--cache", type=Path, help="reuse downloads across runs")
     parser.add_argument(
-        "--vpk-package", type=Path, help="the vpk NuGet package already downloaded by setup-vpk.sh"
+        "--vpk-package", type=Path, help="the vpk NuGet package already downloaded by go -C tools/xtask run . fetch-vpk"
     )
     args = parser.parse_args()
     try:

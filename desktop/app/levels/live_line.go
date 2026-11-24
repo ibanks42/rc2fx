@@ -5,7 +5,7 @@ package levels
 import (
 	"math"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // LineState indicates whether the line has fresh level readings.

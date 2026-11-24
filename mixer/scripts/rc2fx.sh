@@ -27,7 +27,7 @@
 # `launch` runs as the launcher's child and execs the stock binary (injected
 # unless this boot fell back to stock).
 set -euo pipefail
-# Rewritten to `release` by `./xtask package` when RC2FX_RELEASE_BUILD=1
+# Rewritten to `release` by `go -C tools/xtask run . package` when RC2FX_RELEASE_BUILD=1
 # (dev builds use verbose GUI diagnostics; releases use quiet mode).
 rc2fx_build=development
 # A detached copy of this script (rc2fx.sh update-commit) names the bundle it

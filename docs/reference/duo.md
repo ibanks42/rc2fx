@@ -210,7 +210,7 @@ preserves the Duo's boot and controller files and writes the opt-in marker,
 cross-build the mixer runtime first:
 
 ```sh
-./xtask mixer-build
+go -C tools/xtask run . mixer-build
 RC2FX_DUO_ARCHIVE="$PWD/.deps/duo-investigation/duo-1.7.7-os.tar.gz" \
   RC2FX_REAL_ROOT="$PWD" \
   go -C desktop test ./installer -run TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 const (

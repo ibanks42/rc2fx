@@ -10,20 +10,20 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/tuf"
 )
 
 func generateLiveTUFRepos(t *testing.T) (string, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	args := []string{"run", "./internal/interop", "xtask-tuf", dir}
+	args := []string{"run", ".", "tuf-test-repos", dir}
 	repos := []string{"ed25519", "rsa"}
 	if runtime.GOOS == "windows" {
 		args = append(args, "--no-rsa")
 		repos = []string{"ed25519"}
 	}
 	cmd := exec.Command("go", args...)
-	cmd.Dir = ".."
+	cmd.Dir = filepath.Join("..", "..", "tools", "xtask")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generate live TUF repos: %v\n%s", err, out)
 	}

@@ -1,14 +1,14 @@
-# RC2FX build and dev tasks (implemented in desktop/cmd/xtask; see `./xtask help`).
+# RC2FX build and dev tasks (implemented in tools/xtask; see `go -C tools/xtask run . help`).
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
-# PowerShell can't run the POSIX sh launcher, so invoke xtask directly via `go run` without cgo.
-xtask := if os_family() == "windows" { "$env:CGO_ENABLED='0'; $env:RC2FX_XTASK_ROOT=$PWD.Path; $env:RC2FX_XTASK_CWD=$PWD.Path; go -C desktop run ./cmd/xtask" } else { "./xtask" }
+# Run xtask from its own Go module so tasks work before goui-kit is downloaded.
+xtask := "go -C tools/xtask run ."
 
 # List the recipes
 default:
     @just --list --unsorted
 
-# One-time setup: the mixer build (Rust target, cargo-zigbuild, zig check), the goui-kit and Velopack library downloads, and the pre-commit formatting hook
+# One-time setup for building, packaging, and running the app and building the mixer: the goui-kit and Velopack libraries, the Rust target, cargo-zigbuild, cargo-about, vpk, the Linux AppImage tools and notices, a zig check, and the pre-commit formatting hook
 setup:
     {{ xtask }} setup
     git config core.hooksPath .githooks
@@ -33,7 +33,7 @@ desktop:
 desktop-mock:
     {{ xtask }} app --mock --build-only
 
-# Build the desktop app and its packages into target/package (needs the goui-kit download, Velopack's C library, and vpk)
+# Build the desktop app and its packages into target/package (run `just setup` first)
 package:
     {{ xtask }} package
 
@@ -51,7 +51,7 @@ desktop-embedded: mixer-build
 
 # Build the AppImage from the working tree in the release container (glibc 2.28), then check it on several distributions (Linux, needs podman or docker)
 package-check:
-    bash .github/scripts/package-check.sh
+    {{ xtask }} package-check
 
 # Cross-build the mixer side into target/mixer (unchanged files are left as they are)
 mixer-build:
@@ -97,7 +97,7 @@ mixer-disable:
 schema:
     {{ xtask }} schema
 
-# Tests and lints: the desktop app (Go; the UI packages only when the goui-kit download is linked) and, on Linux, the Rust workspace
+# Tests and lints: the desktop app and tools/xtask (Go; the UI packages only when the goui-kit download is linked) and, on Linux, the Rust workspace
 [unix]
 test:
     {{ xtask }} schema --check
@@ -105,6 +105,7 @@ test:
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && CGO_ENABLED=0 go vet $pkgs
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/goui-kit ]; then CGO_LDFLAGS="-L$PWD/third_party/goui-kit/lib" go test -tags gkstatic ./...; else go test $pkgs; fi
     go -C desktop test -tags mockmixer ./transport/...
+    cd tools/xtask && test -z "$(gofmt -l .)" && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...
     if [ "$(uname -s)" = Linux ]; then {{ just_executable() }} test-rust; else echo "Rust tests skipped: the Rust crates build for Linux only"; fi
 
 # Tests and lints of the Rust workspace, warnings as errors (the Rust crates build for Linux only)
@@ -114,11 +115,12 @@ test-rust:
     cargo clippy --locked --workspace --all-targets -- -D warnings
     cargo clippy --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
-# Tests and lints: the desktop app (Go; the UI packages only when the goui-kit download is linked). The Rust crates build for Linux only.
+# Tests and lints: the desktop app and tools/xtask (Go; the UI packages only when the goui-kit download is linked). The Rust crates build for Linux only.
 [windows]
 test:
     $nocgo = & { {{ xtask }} non-ui-packages }; $pkgs = if (Test-Path desktop/third_party/goui-kit) { './...' } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/goui-kit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/goui-kit/lib).Path)" }; go -C desktop test -tags gkstatic $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
+    $env:CGO_ENABLED='0'; go -C tools/xtask vet ./...; if (-not $?) { exit 1 }; go -C tools/xtask test ./...; if (-not $?) { exit 1 }
 
 # Tests of the mixer side: the native library binding check, launcher scripts and C modules (Linux, with python3 and cc)
 test-mixer:

@@ -6,7 +6,7 @@ with `rc2fxd` on the mixer over USB 1 with no background daemon. Once you close
 the app, audio processing keeps running on the mixer.
 
 ```sh
-just app        # ./xtask app: development build in target/debug, then run it
+just app        # go -C tools/xtask run . app: development build in target/debug, then run it
 just desktop    # build target/release/rc2fx (rc2fx.exe on Windows)
 ```
 
@@ -16,7 +16,7 @@ just desktop    # build target/release/rc2fx (rc2fx.exe on Windows)
   MinGW-w64 gcc on Windows, gcc (or clang) on Linux, or the Xcode command-line
   tools on macOS.
 - The goui-kit static library for your platform in `desktop/third_party/goui-kit`
-  (fetched by `just setup`, or `./xtask fetch-goui-kit TARGET` for CI or
+  (fetched by `just setup`, or `go -C tools/xtask run . fetch-goui-kit TARGET` for CI or
   another platform), linked directly into the binary. Builds pass
   `-tags gkstatic` to select the static library; without it, package `gk` looks
   for the shared library at runtime.

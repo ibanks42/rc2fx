@@ -4,7 +4,7 @@
 # is AlmaLinux 8 (glibc 2.28, as RHEL 8, Debian 10 and Ubuntu 18.10): the
 # oldest maintained base, and the oldest glibc GitHub's JavaScript actions
 # run on. It has the pinned Rust (for Check's lints and tests, and with
-# cargo-about for the AppImage's notices), Go for ./xtask and the desktop app
+# cargo-about for the AppImage's notices), Go for tools/xtask and the desktop app
 # (cgo against goui-kit's static library, whose system libraries the AppImage
 # bundles from here),
 # and .NET and mksquashfs for vpk, which makes the AppImage.

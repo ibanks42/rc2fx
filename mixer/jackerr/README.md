@@ -67,7 +67,7 @@ output path:
 
 It reads published slots with sequence checks and writes an immutable snapshot;
 simply copying the live ring directory does not produce a consistent view.
-Decode snapshots on your computer using `./xtask mixer xruns`'s decoder or
+Decode snapshots on your computer using `just mixer-xruns`'s decoder or
 `tests/jackerr_ring.py`.
 
 When analyzing records, check the PID, creation clock, window indices, unknown
@@ -89,5 +89,5 @@ python3 -I -m unittest discover -s mixer/jackerr/tests -p test_jackerr.py
 python3 mixer/scripts/tests/recorder_launcher.py
 python3 mixer/scripts/tests/install.py
 (cd desktop && go test ./installer/...)
-(cd desktop && go test ./internal/xtask/...)
+(cd tools/xtask && go test ./...)
 ```
