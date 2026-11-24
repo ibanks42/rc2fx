@@ -1,7 +1,9 @@
-# A link to an unpacked gpuikit download (see README.md); never committed.
-/third_party/gpuikit
-/third_party/gpuikit-diag
-/third_party/.fetch-gpuikit.*
+# A link to an unpacked goui-kit download (see README.md); never committed.
+/third_party/goui-kit
+/third_party/goui-kit-diag
+/third_party/.fetch-goui-kit.*
 /bin/
-# Velopack's C library, from scripts/fetch-velopack.sh; never committed.
+# Velopack's C library, from ./xtask fetch-velopack; never committed.
 /third_party/velopack/
+# Packaging tools from ./xtask setup; never committed.
+/third_party/tools/

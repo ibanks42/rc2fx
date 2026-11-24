@@ -8,7 +8,7 @@ package app
 import (
 	"time"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
 
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate/vpkc"

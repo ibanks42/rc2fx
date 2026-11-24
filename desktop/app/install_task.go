@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -143,7 +144,7 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 		body = body.Child(prose(fmt.Sprintf("Your system will ask for your password once, %s. The app uses it only to update the mixer.", what), Faint))
 	}
 	t.body = body
-	t.secondary = []gk.ButtonEl{taskButton("task-not-now", "Not now", false).Disabled(i.busy()).
+	t.secondary = []kit.ButtonEl{taskButton("task-not-now", "Not now", false).Disabled(i.busy()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })}
 	label := "Install RC2FX"
 	switch {
@@ -204,7 +205,7 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 		Child(prose("The recommended pair is the newest that has been tested together. Older RØDE firmware may lack fixes RØDE has made since.", Faint))
 	return gk.VFlex(s.WFull, s.RoundedXl, s.Border1).Bg(rgb(surface().Panel)).BorderColor(rgb(surface().Line)).
 		Child(head).
-		Child(gk.Collapsible().Open(open).Content(inner))
+		Child(kit.Collapsible().Open(open).Content(inner))
 }
 
 func (a *App) blockerLine(i *Installer, why string) gk.DivEl {
@@ -223,7 +224,7 @@ func (a *App) blockerLine(i *Installer, why string) gk.DivEl {
 	}
 	line := gk.HFlex(s.ItemsCenter, s.FlexWrap, s.Gap3).Child(gk.Div(s.Flex1, s.MinW0).Child(prose(why, Warn)))
 	if again != nil {
-		line = line.Child(gk.Button("task-check-again").Ghost().Small().Label("Check again").
+		line = line.Child(kit.Button("task-check-again").Ghost().Small().Label("Check again").
 			Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.installerEvent(cx, again) }))
 	}
@@ -234,7 +235,7 @@ func (a *App) duoOptIn(id gk.ID) gk.DivEl {
 	return gk.HFlex(s.ItemsCenter, s.Gap3).
 		Child(gk.Icon(gk.IconTriangleAlert).TextColor(rgb(Warn))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Text)).Child(txt("RC2FX is untested on the Duo. Install anyway."))).
-		Child(gk.Switch(id).Checked(a.allowDuo).
+		Child(kit.Switch(id).Checked(a.allowDuo).
 			Disabled(a.installer != nil && (a.installer.busy() || a.installer.model.Run != nil)).
 			OnClick(func(cx *gk.Cx, value bool) { a.setAllowDuo(cx, value) }))
 }
@@ -286,7 +287,7 @@ func (a *App) storageFixOptIn(i *Installer) gk.DivEl {
 	}
 	bar := gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.FlexWrap, s.Gap3).Pt(px(10)).Style(s.BorderT1).
 		BorderColor(rgb(surface().Line)).
-		Child(gk.Switch("task-storage-fix").Checked(m.StorageFixChosen).Label("Include partition fix in this install").
+		Child(kit.Switch("task-storage-fix").Checked(m.StorageFixChosen).Label("Include partition fix in this install").
 			Disabled(i.busy() || m.Run != nil).
 			OnClick(func(cx *gk.Cx, value bool) {
 				if a.installer != nil {
@@ -294,7 +295,7 @@ func (a *App) storageFixOptIn(i *Installer) gk.DivEl {
 				}
 				a.notify(cx)
 			})).
-		Child(gk.Link("task-update-bug").Child(txt("More about the bug")).
+		Child(kit.Link("task-update-bug").Child(txt("More about the bug")).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx) }))
 	inner := gk.VFlex(s.Gap3).Px(px(14)).Pb(px(14)).Pt(px(2)).
 		Child(detail("What it does",
@@ -310,7 +311,7 @@ func (a *App) storageFixOptIn(i *Installer) gk.DivEl {
 	}
 	return gk.VFlex(s.WFull, s.RoundedXl, s.Border1).Bg(rgb(surface().Panel)).BorderColor(borderColor).
 		Child(head).
-		Child(gk.Collapsible().Open(open).Content(inner))
+		Child(kit.Collapsible().Open(open).Content(inner))
 }
 
 func experimentalTag() gk.DivEl {
@@ -413,7 +414,7 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 	if m.Canceling() {
 		stop = "Stopping…"
 	}
-	t.secondary = []gk.ButtonEl{taskButton("task-stop", stop, false).
+	t.secondary = []kit.ButtonEl{taskButton("task-stop", stop, false).
 		Disabled(!m.CanStop(now) || m.Canceling()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.stopTask(cx) })}
 	t.primary = taskButton("task-done", "Done", true).Disabled(true)
@@ -452,7 +453,7 @@ func (a *App) updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl 
 			Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(sending))).
 			Child(gk.Div(s.Flex1, s.MinW0).Child(txt("1. Sending the firmware to the mixer"))).
 			Child(gk.Div().TextColor(rgb(Faint)).Child(txt(share)))).
-		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(gk.Progress("task-progress").Value(value))).
+		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(kit.Progress("task-progress").Value(value))).
 		Child(seenRow(surface().Line, "2. The mixer installs it, then restarts. This part has no progress to show.", false))
 	if step == installflow.StepUSBMode || (step == installflow.StepFlash && !m.Busy()) {
 		panel = panel.Child(gk.Div(s.Pt2).Child(a.spinnerLine("Putting the mixer in update mode…")))
@@ -501,7 +502,7 @@ func (a *App) longerPanel(i *Installer) gk.DivEl {
 		panel = panel.Child(prose("RC2FX answers, but the mixer hasn’t finished yet. It may still be working.", Muted))
 	}
 	buttons := gk.HFlex(s.ItemsCenter, s.Gap2).Mt(px(12)).
-		Child(gk.Button("task-keep-waiting").Label("Keep waiting").
+		Child(kit.Button("task-keep-waiting").Label("Keep waiting").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if a.installer != nil {
 					a.installer.keptWaiting = true
@@ -509,7 +510,7 @@ func (a *App) longerPanel(i *Installer) gk.DivEl {
 				a.notify(cx)
 			}))
 	if atStart && !i.waitHelp {
-		buttons = buttons.Child(gk.Button("task-wait-help").Ghost().Label("What can I do?").
+		buttons = buttons.Child(kit.Button("task-wait-help").Ghost().Label("What can I do?").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if a.installer != nil {
 					a.installer.waitHelp = true
@@ -566,7 +567,7 @@ func (a *App) failedPage(i *Installer, t *guidedTask) {
 		body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 	}
 	t.body = body
-	t.secondary = []gk.ButtonEl{taskButton("task-stop", "Stop", false).Disabled(i.busy()).
+	t.secondary = []kit.ButtonEl{taskButton("task-stop", "Stop", false).Disabled(i.busy()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.stopTask(cx) })}
 	label := "Try again"
 	if accessEnded {
@@ -638,7 +639,7 @@ func (a *App) finishedPage(i *Installer, t *guidedTask) {
 	chosen := min(max(i.mic, 0), len(mics)-1)
 	row := gk.HFlex(s.ItemsCenter, s.FlexWrap).Gap(px(8))
 	for n, mic := range mics {
-		b := gk.Button(gk.Key("task-mic", n)).Label(mic.name)
+		b := kit.Button(gk.Key("task-mic", n)).Label(mic.name)
 		if n == chosen {
 			b = b.Primary()
 		}
@@ -654,7 +655,7 @@ func (a *App) finishedPage(i *Installer, t *guidedTask) {
 		Child(row).
 		Child(gk.Div(s.Mt2).Child(prose("The app opens that channel with noise suppression ready to switch on.", Faint))))
 	t.body = body
-	t.secondary = []gk.ButtonEl{taskButton("task-not-now", "Not now", false).
+	t.secondary = []kit.ButtonEl{taskButton("task-not-now", "Not now", false).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, true) })}
 	mic := mics[chosen]
 	t.primary = taskButton("task-open-mic", "Open "+mic.name, true).

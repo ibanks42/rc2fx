@@ -90,18 +90,13 @@ echo "Packaging $head, source digest $source, with these local changes:"
 echo "${changes:-(none)}"
 
 # Use -modcacherw so the host user can clean up the mounted Go module cache.
-# Forward GH_TOKEN/GITHUB_TOKEN as GPUIKIT_TOKEN when GPUIKIT_TOKEN isn't set.
-if [ -z "${GPUIKIT_TOKEN:-}" ] && [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
-    GPUIKIT_TOKEN=${GH_TOKEN:-$GITHUB_TOKEN}
-fi
-export GPUIKIT_TOKEN=${GPUIKIT_TOKEN:-}
 # shellcheck disable=SC2016 # $HOME belongs to the container.
 snapshot |
     "$engine" run --rm -i "${user[@]}" --security-opt label=disable \
         -v "$check/target:/work/src/target" -v "$check/cache:/work/cache" \
         -e CARGO_HOME=/work/cache/cargo -e HOME=/work/cache/home \
         -e GOCACHE=/work/cache/go-build -e GOMODCACHE=/work/cache/gomod \
-        -e GOFLAGS=-modcacherw -e GOTOOLCHAIN=local -e GPUIKIT_TOKEN \
+        -e GOFLAGS=-modcacherw -e GOTOOLCHAIN=local \
         -e "RC2FX_TOOLS_DIR=$tools" -w /work/src \
         "$image" sh -ec 'mkdir -p "$HOME"
             tar --extract --no-same-owner --directory=/work/src

@@ -12,6 +12,6 @@ here() { pwd -W 2> /dev/null || pwd; }
 RC2FX_XTASK_CWD=$(here)
 RC2FX_XTASK_ROOT=$(cd -- "$root" && here)
 export RC2FX_XTASK_ROOT RC2FX_XTASK_CWD
-# Keep cgo off for xtask itself so cold starts don't compile e2fsprogs or gpuikit;
+# Keep cgo off for xtask itself so cold starts don't compile e2fsprogs or goui-kit;
 # subcommands that build the app re-enable cgo as needed.
 CGO_ENABLED=0 exec go -C "$RC2FX_XTASK_ROOT/desktop" run ./cmd/xtask "$@"

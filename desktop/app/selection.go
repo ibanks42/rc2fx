@@ -6,8 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -170,10 +171,10 @@ func (a *App) selectionNotice(cx *gk.Cx) (gk.DivEl, bool) {
 		apply = "Use these channels"
 	}
 	return c.Child(gk.HFlex(s.Gap2).
-		Child(gk.Button("apply-path-selection").Primary().Label(apply).
+		Child(kit.Button("apply-path-selection").Primary().Label(apply).
 			Disabled(!a.selectionReady()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.changeSelection(cx) })).
-		Child(gk.Button("reset-path-selection").Ghost().Label("Keep the mixer's").
+		Child(kit.Button("reset-path-selection").Ghost().Label("Keep the mixer's").
 			Disabled(!a.session.SelectionDirty() || a.transitionBusy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if saved := a.session.Saved; saved != nil {

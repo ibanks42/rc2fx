@@ -8,12 +8,12 @@ xtask := if os_family() == "windows" { "$env:CGO_ENABLED='0'; $env:RC2FX_XTASK_R
 default:
     @just --list --unsorted
 
-# One-time setup: the mixer build (Rust target, cargo-zigbuild, zig check) and the pre-commit formatting hook
+# One-time setup: the mixer build (Rust target, cargo-zigbuild, zig check), the goui-kit and Velopack library downloads, and the pre-commit formatting hook
 setup:
     {{ xtask }} setup
     git config core.hooksPath .githooks
 
-# Run the desktop app (development build; needs desktop/third_party/gpuikit)
+# Run the desktop app (development build; needs desktop/third_party/goui-kit)
 app:
     {{ xtask }} app
 
@@ -33,7 +33,7 @@ desktop:
 desktop-mock:
     {{ xtask }} app --mock --build-only
 
-# Build the desktop app and its packages into target/package (needs the gpuikit download, Velopack's C library, and vpk)
+# Build the desktop app and its packages into target/package (needs the goui-kit download, Velopack's C library, and vpk)
 package:
     {{ xtask }} package
 
@@ -97,13 +97,13 @@ mixer-disable:
 schema:
     {{ xtask }} schema
 
-# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and, on Linux, the Rust workspace
+# Tests and lints: the desktop app (Go; the UI packages only when the goui-kit download is linked) and, on Linux, the Rust workspace
 [unix]
 test:
     {{ xtask }} schema --check
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && CGO_ENABLED=0 go vet $pkgs
-    pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $pkgs; fi
+    pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/goui-kit ]; then CGO_LDFLAGS="-L$PWD/third_party/goui-kit/lib" go test -tags gkstatic ./...; else go test $pkgs; fi
     go -C desktop test -tags mockmixer ./transport/...
     if [ "$(uname -s)" = Linux ]; then {{ just_executable() }} test-rust; else echo "Rust tests skipped: the Rust crates build for Linux only"; fi
 
@@ -114,10 +114,10 @@ test-rust:
     cargo clippy --locked --workspace --all-targets -- -D warnings
     cargo clippy --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
-# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked). The Rust crates build for Linux only.
+# Tests and lints: the desktop app (Go; the UI packages only when the goui-kit download is linked). The Rust crates build for Linux only.
 [windows]
 test:
-    $nocgo = & { {{ xtask }} non-ui-packages }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { './...' } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/gpuikit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/gpuikit/lib).Path)" }; go -C desktop test $pkgs; if (-not $?) { exit 1 }
+    $nocgo = & { {{ xtask }} non-ui-packages }; $pkgs = if (Test-Path desktop/third_party/goui-kit) { './...' } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/goui-kit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/goui-kit/lib).Path)" }; go -C desktop test -tags gkstatic $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
 
 # Tests of the mixer side: the native library binding check, launcher scripts and C modules (Linux, with python3 and cc)

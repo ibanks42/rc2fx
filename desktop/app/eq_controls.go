@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"slices"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/chart"
+	gkedit "github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -54,13 +58,13 @@ func (a *App) eqHead(cx *gk.Cx) gk.Element {
 	if target.Channels == 2 {
 		about = "Up to 32 bands, on both sides or left and right separately. Drag a point, scroll on it for Q, double-click the graph to add a band, click a point to edit it."
 	}
-	menu := gk.NewPopupMenu()
+	menu := kit.NewPopupMenu()
 	for _, item := range []struct {
 		label string
 		open  func(cx *gk.Cx)
 	}{{"Import EQ file…", a.importEQ}, {"Paste EQ", a.pasteEQ}, {"Export EQ file…", a.exportEQ}} {
 		open := item.open
-		menu = menu.Item(gk.NewPopupMenuItem(item.label).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
+		menu = menu.Item(kit.NewPopupMenuItem(item.label).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			if a.fileBusy {
 				gk.Quiet(cx)
 				return
@@ -74,13 +78,13 @@ func (a *App) eqHead(cx *gk.Cx) gk.Element {
 	}
 	head := gk.HFlex(s.ItemsCenter, s.Gap3).H(px(36)).
 		Child(gk.Div(s.FontSemibold, s.WhitespaceNowrap).TextSize(px(20)).Child(txt(core.EffectEQ.Label())).
-			ID("eq-about").Tooltip(gk.NewKitTooltip(about)))
+			ID("eq-about").Tooltip(overlay.NewKitTooltip(about)))
 	if target.Channels == 2 {
 		head = head.Child(gk.Div().Ml(px(8)).Child(a.eqSides(cx)))
 	}
 	return head.
 		Child(gk.Div(s.Flex1)).
-		Child(gk.DropdownMenu(gk.Button("eq-import-export").Ghost().Small().Label("Import / Export").DropdownCaret(true).
+		Child(kit.DropdownMenu(kit.Button("eq-import-export").Ghost().Small().Label("Import / Export").DropdownCaret(true).
 			Disabled(a.fileBusy), menu)).
 		Child(gk.Div().Ml(px(6)).TextSize(px(13.5)).TextColor(rgb(Muted)).Child(txt(state))).
 		Child(a.effectSwitch(target, core.EffectEQ))
@@ -101,7 +105,7 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 	if linked {
 		both = pill("eq-both", "Both sides", true)
 	} else {
-		menu := gk.NewPopupMenu()
+		menu := kit.NewPopupMenu()
 		for _, choice := range []struct {
 			keep  core.Channel
 			label string
@@ -110,7 +114,7 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 			{core.ChannelRight, "Use the right side for both"},
 		} {
 			keep := choice.keep
-			menu = menu.Item(gk.NewPopupMenuItem(choice.label).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
+			menu = menu.Item(kit.NewPopupMenuItem(choice.label).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				model.Link(a.target(), keep)
 				a.channel = core.ChannelLeft
 				a.band = 0
@@ -118,7 +122,7 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 				a.notify(cx)
 			}))
 		}
-		both = gk.DropdownMenu(gk.Button("eq-both").Ghost().Xsmall().Label("Both sides").DropdownCaret(true), menu)
+		both = kit.DropdownMenu(kit.Button("eq-both").Ghost().Xsmall().Label("Both sides").DropdownCaret(true), menu)
 	}
 	return pills().
 		Child(both).
@@ -196,7 +200,7 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 			// Strip the input's built-in horizontal padding so 3-decimal Q values don't clip.
 			if editor := a.editorFor(parameter); editor != nil {
 				return cell.Child(gk.Div(s.Border1).Px(px(4)).Rounded(px(5)).Bg(rgb(0x0b0e16)).
-					BorderColor(rgb(Accent)).Child(gk.Input(editor.input).Appearance(false).Style(s.Px0)))
+					BorderColor(rgb(Accent)).Child(gkedit.Input(editor.input).Appearance(false).Style(s.Px0)))
 			}
 		}
 		return cell.Child(gk.Div(s.TextRight, s.CursorText, s.WhitespaceNowrap).Px(px(4)).Mx(px(-4)).Rounded(px(5)).
@@ -227,14 +231,14 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 			}
 			a.notify(cx)
 		}).
-		Tooltip(gk.NewKitTooltip(onTip))
+		Tooltip(overlay.NewKitTooltip(onTip))
 	kind := gk.Div(s.FlexShrink0, s.CursorPointer).W(px(18)).Child(typeIcon(band.BandType, iconColor)).
 		ID(gk.Key("band-type-icon", index)).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			gk.StopPropagation(cx)
 			a.openBandPopover(cx, index)
 		}).
-		Tooltip(gk.NewKitTooltip(band.BandType.Label() + ": click to edit the band"))
+		Tooltip(overlay.NewKitTooltip(band.BandType.Label() + ": click to edit the band"))
 	row = row.
 		Child(number).
 		Child(kind).
@@ -277,7 +281,7 @@ func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Elemen
 	var view gk.Element
 	if editor != nil && a.editingValue != nil && *a.editingValue == parameter {
 		view = gk.Div(s.Border1).W(px(96)).Px(px(4)).Rounded(px(5)).Bg(rgb(0x0b0e16)).BorderColor(rgb(Accent)).
-			Child(gk.Input(editor.input).Appearance(false).Style(s.Px0))
+			Child(gkedit.Input(editor.input).Appearance(false).Style(s.Px0))
 	} else {
 		color := Text
 		if off {
@@ -309,7 +313,7 @@ func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Elemen
 				a.syncEditorValues(cx)
 				a.notify(cx)
 			}).
-			Tooltip(gk.NewKitTooltip("Click to type, or scroll to change by 0.5 dB."))
+			Tooltip(overlay.NewKitTooltip("Click to type, or scroll to change by 0.5 dB."))
 	}
 	return gk.HFlex(s.ItemsCenter, s.JustifyBetween).TextSize(px(13)).TextColor(rgb(Muted)).
 		Child(txt(label)).Child(view)
@@ -384,7 +388,7 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 			p = p.Hover(hover().Bg(white(0.04)))
 		}
 		types = types.Child(p.ID(gk.Key("band-type", index)).
-			Tooltip(gk.NewKitTooltip(option.Label())).
+			Tooltip(overlay.NewKitTooltip(option.Label())).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if b := a.selectedBand(); b != nil {
 					b.BandType = option
@@ -437,7 +441,7 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 				}))).
 		Child(types).
 		Child(gk.HFlex(s.ItemsCenter, s.Gap3).
-			Child(gk.Div().ID("band-mode").Child(design).Tooltip(gk.NewKitTooltip(
+			Child(gk.Div().ID("band-mode").Child(design).Tooltip(overlay.NewKitTooltip(
 				"Filter design: how Q becomes the filter's shape. APO matches Equalizer APO (DR), RLC matches analog-style (BT). Imported EQ files set this for you."))).
 			Child(gk.Div(s.Flex1)).
 			Child(toggleRow("band-enabled", "On", band.Enabled, func(b *core.Band, v bool) { b.Enabled = v })).
@@ -484,7 +488,7 @@ func bandBadge(index int, size float32, on bool) gk.DivEl {
 
 func typeIcon(kind core.BandType, color uint32) gk.Element {
 	return gk.Div(s.FlexShrink0).W(px(18)).H(px(14)).
-		Child(gk.Plot(gk.NewPlotLine(edit.TypeIconPoints(kind, 18, 14), 1.5, rgb(color))))
+		Child(chart.Plot(chart.NewPlotLine(edit.TypeIconPoints(kind, 18, 14), 1.5, rgb(color))))
 }
 
 func bandSummary(band *core.Band) string {

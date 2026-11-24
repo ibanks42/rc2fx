@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -166,7 +167,7 @@ func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 		panel = panel.Child(txt("Choose the equalizer to import:"))
 		for index, candidate := range imp.stage.Candidates {
 			key := candidate.Key
-			panel = panel.Child(gk.Button(gk.Key("import-candidate", index)).
+			panel = panel.Child(kit.Button(gk.Key("import-candidate", index)).
 				Label(fmt.Sprintf("%s · %d bands", candidate.Key, candidate.BandCount)).
 				Disabled(candidate.Error != nil).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.chooseImport(cx, key, nil) }))
@@ -181,7 +182,7 @@ func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 			label   string
 		}{{core.ChannelLeft, "Left"}, {core.ChannelRight, "Right"}} {
 			key, channel := imp.stage.Source.Key, side.channel
-			panel = panel.Child(gk.Button(gk.Key("import-channel", index)).Label(side.label).
+			panel = panel.Child(kit.Button(gk.Key("import-channel", index)).Label(side.label).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.chooseImport(cx, key, &channel) }))
 		}
 	case core.ImportResultReady:
@@ -191,11 +192,11 @@ func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 		if imp.stage.OtherEffects > 0 {
 			panel = panel.Child(txt("Only the equalizer is imported; the preset’s other effects are excluded."))
 		}
-		panel = panel.Child(gk.Button("import-confirm").Primary().
+		panel = panel.Child(kit.Button("import-confirm").Primary().
 			Label(fmt.Sprintf("Replace %s EQ", a.targetName(a.target()))).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.finishImport(cx) }))
 	}
-	return panel.Child(gk.Button("import-cancel").Ghost().Label("Cancel import").
+	return panel.Child(kit.Button("import-cancel").Ghost().Label("Cancel import").
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			a.importDraft = nil
 			a.importError = nil

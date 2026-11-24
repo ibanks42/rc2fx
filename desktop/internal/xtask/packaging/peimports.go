@@ -55,7 +55,7 @@ func allowedWindowsImport(name string) bool {
 var commonControls6 = []byte("Microsoft.Windows.Common-Controls")
 
 // checkWindowsManifest verifies that rc2fx.exe embeds a Common Controls 6
-// manifest (provided by package gk's .syso). libgpuikit imports
+// manifest (provided by package gk's .syso). libgouikit imports
 // TaskDialogIndirect from comctl32 v6, so missing this manifest causes startup
 // failure on Windows.
 func checkWindowsManifest(exe string) error {

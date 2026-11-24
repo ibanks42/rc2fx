@@ -3,8 +3,9 @@ package app
 import (
 	"slices"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/s"
+	"github.com/ibanks42/goui-kit/gk/table"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/installer"
@@ -16,11 +17,11 @@ type pickerItem[V any] struct {
 	value        V
 }
 
-// picker wraps a gk.Select whose options and selection are driven by the
+// picker wraps a table.Select whose options and selection are driven by the
 // installer model. User confirmations are forwarded to the model and sync
 // reconciles the widget back to model state.
 type picker[V any] struct {
-	state    gk.SelectState
+	state    table.SelectState
 	source   gk.RowSource
 	sub      gk.Subscription
 	key      func(V) string
@@ -37,9 +38,9 @@ func newPicker[V any](a *App, cx *gk.Cx, key func(V) string, pick func(m *instal
 		}
 		return gk.Div().Py(px(4)).Child(txt(p.items[at.Row].title))
 	}))
-	p.state = gk.NewSelectState(cx, p.source, gk.NoRow).Build()
-	p.sub = p.state.OnSelectEvent(cx, func(cx *gk.Cx, e gk.SelectEvent) {
-		confirm, ok := e.(gk.SelectEventConfirm)
+	p.state = table.NewSelectState(cx, p.source, table.NoRow).Build()
+	p.sub = p.state.OnSelectEvent(cx, func(cx *gk.Cx, e table.SelectEvent) {
+		confirm, ok := e.(table.SelectEventConfirm)
 		if !ok {
 			return
 		}
@@ -89,7 +90,7 @@ func (p *picker[V]) sync(cx *gk.Cx, items []pickerItem[V], selected *V) {
 		if key != nil {
 			p.state.SetSelectedValue(cx, *key)
 		} else {
-			p.state.SetSelectedIndex(cx, gk.NoRow)
+			p.state.SetSelectedIndex(cx, table.NoRow)
 		}
 		p.selected = key
 	}
@@ -102,14 +103,14 @@ func (p *picker[V]) release(free func(...any)) {
 	free(p.sub, p.state, p.source)
 }
 
-// Fixed width so gk.Select has a definite container width (otherwise it
+// Fixed width so table.Select has a definite container width (otherwise it
 // collapses to zero) while fitting the longest version+channel label.
 const versionSelectWidth = 260
 
 func pickerSelect[V any](p *picker[V], id string, disabled bool) gk.Element {
 	slot := gk.Div(s.FlexNone).W(px(versionSelectWidth))
 	if p != nil {
-		slot = slot.Child(gk.Select(p.state).ID(id).Placeholder("None available").Disabled(disabled))
+		slot = slot.Child(table.Select(p.state).ID(id).Placeholder("None available").Disabled(disabled))
 	}
 	return slot
 }

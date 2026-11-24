@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"math"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/chart"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -47,12 +48,12 @@ func (a *App) graphPoint(position [2]float32) (frequency, gain float64, ok bool)
 // captured on the previous prepaint pass.
 func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	if width <= 0 || tall <= 0 {
-		return gk.Plot()
+		return chart.Plot()
 	}
 	at := func(x, y float64) [2]float32 { return [2]float32{float32(x) * width, float32(y) * tall} }
 	var parts []gk.PlotPart
 	rule := func(from, to [2]float32, color uint32) {
-		parts = append(parts, gk.NewPlotLine([][2]float32{from, to}, 1, rgb(color)))
+		parts = append(parts, chart.NewPlotLine([][2]float32{from, to}, 1, rgb(color)))
 	}
 	for _, frequency := range edit.GridHz {
 		x := edit.FrequencyX(frequency)
@@ -73,9 +74,9 @@ func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	area = append(area, points...)
 	area = append(area, at(1, 0.5))
 	parts = append(parts,
-		gk.NewPlotArea(area, rgba(0x7aa8f01f)),
-		gk.NewPlotLine(points, 2.5, gradient()))
-	return gk.Plot(parts...)
+		chart.NewPlotArea(area, rgba(0x7aa8f01f)),
+		chart.NewPlotLine(points, 2.5, gradient()))
+	return chart.Plot(parts...)
 }
 
 func (a *App) eqGraph(cx *gk.Cx) gk.Element {

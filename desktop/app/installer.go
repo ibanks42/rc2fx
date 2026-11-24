@@ -16,8 +16,9 @@ import (
 	"slices"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -598,7 +599,7 @@ func (a *App) mixerUpdateNotice(cx *gk.Cx) (gk.DivEl, bool) {
 	return card().BorderColor(rgb(Warn)).
 		Child(gk.Div(s.FontSemibold).TextColor(rgb(Warn)).Child(txt("Update the RC2FX mixer software"))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Muted)).Child(txt(text))).
-		Child(gk.HFlex(s.Gap2).Child(gk.Button("mixer-update-install").Primary().Label("Install update").
+		Child(gk.HFlex(s.Gap2).Child(kit.Button("mixer-update-install").Primary().Label("Install update").
 			Disabled(a.installerFlashing()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.installMixerUpdate(cx) }))), true
 }

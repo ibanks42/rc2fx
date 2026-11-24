@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/developer"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -21,12 +23,12 @@ type SSH struct{ developer.SSH }
 
 func (s *SSH) clear() { s.Clear() }
 
-func addressInput(cx *gk.Cx) gk.InputState {
-	input := gk.NewInputState(cx).Placeholder("192.168.1.20").
+func addressInput(cx *gk.Cx) editor.InputState {
+	input := editor.NewInputState(cx).Placeholder("192.168.1.20").
 		Validate(func(_ *gk.Cx, text string) bool { return developer.ValidAddress(text) }).
 		Build()
-	input.OnInputEvent(cx, func(cx *gk.Cx, event gk.InputEvent) {
-		if _, change := event.(gk.InputEventChange); !change {
+	input.OnInputEvent(cx, func(cx *gk.Cx, event editor.InputEvent) {
+		if _, change := event.(editor.InputEventChange); !change {
 			gk.Quiet(cx)
 		}
 	})
@@ -199,7 +201,7 @@ func (a *App) sshLogin(cx *gk.Cx, command string) [2]gk.DivEl {
 	mono := gk.KitTheme(cx).MonoFontFamily(cx)
 	return [2]gk.DivEl{
 		detailRow("Mixer address", gk.VFlex().Gap(px(6)).
-			Child(gk.Div().MaxW(px(240)).Child(gk.Input(a.sshAddress))).
+			Child(gk.Div().MaxW(px(240)).Child(editor.Input(a.sshAddress))).
 			Child(gk.Div().TextSize(px(12.5)).TextColor(rgb(Faint)).
 				Child(txt("On the mixer, under Settings › Network.")))).
 			Style(s.ItemsStart),
@@ -299,7 +301,7 @@ func (a *App) developerSection(cx *gk.Cx) gk.DivEl {
 	rows := gk.Div().Child(row(
 		labeled("Developer mode",
 			"Shows developer controls for the connected mixer. Turning it off only hides them: it does not remove access."),
-		gk.Switch("developer-mode").Checked(a.developerMode).
+		kit.Switch("developer-mode").Checked(a.developerMode).
 			OnClick(func(cx *gk.Cx, on bool) { a.setDeveloperMode(cx, on) })))
 	if a.developerMode {
 		if a.developerVisible() {

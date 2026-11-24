@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -44,12 +46,12 @@ func resetControl(id, label string, confirming, connected bool, ask, cancel, res
 	if confirming {
 		return gk.HFlex(s.ItemsCenter, s.Gap2).
 			Child(gk.Div(s.TextXs).TextColor(rgb(Muted)).Child(txt("Reset counters and events on the mixer?"))).
-			Child(gk.Button(gk.Key(id, 0)).Outline().Small().Label("Cancel").
+			Child(kit.Button(gk.Key(id, 0)).Outline().Small().Label("Cancel").
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { cancel(cx) })).
-			Child(gk.Button(gk.Key(id, 1)).Danger().Small().Label("Reset").Disabled(!connected).
+			Child(kit.Button(gk.Key(id, 1)).Danger().Small().Label("Reset").Disabled(!connected).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { reset(cx) }))
 	}
-	return gk.Div().Child(gk.Button(gk.Key(id, 2)).Danger().Outline().Small().Icon(gk.IconUndo2).Label(label).
+	return gk.Div().Child(kit.Button(gk.Key(id, 2)).Danger().Outline().Small().Icon(gk.IconUndo2).Label(label).
 		Disabled(!connected).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { ask(cx) }))
 }
 
@@ -105,7 +107,7 @@ func (v *eventsView) filters(log *EventLog) gk.DivEl {
 			}))
 	}
 	startup := log.StartupCount()
-	return chips.Child(gk.Div(s.Flex1)).Child(gk.Switch("event-startup").Small().Checked(log.ShowStartup).
+	return chips.Child(gk.Div(s.Flex1)).Child(kit.Switch("event-startup").Small().Checked(log.ShowStartup).
 		Label(fmt.Sprintf("Startup events (%d)", startup)).
 		Tooltip("Events from the engine's first 30 seconds of audio. Bursts while it starts are expected.").
 		OnClick(func(cx *gk.Cx, on bool) {
@@ -176,7 +178,7 @@ func (v *eventsView) table(log *EventLog, mono string) gk.DivEl {
 			}
 			details := lines.ID(gk.Key("event-details", int(seq)))
 			if row.Kind == core.DiagnosticsKindXrun {
-				details = details.Tooltip(gk.NewKitTooltip(telemetry.XrunNote))
+				details = details.Tooltip(overlay.NewKitTooltip(telemetry.XrunNote))
 			}
 			cell = cell.Child(details)
 		}

@@ -143,7 +143,7 @@ func stage(appdir string, executable []byte, licenseFiles []licenseFile) error {
 }
 
 // stageLibraries copies any sidecar shared libraries into usr/lib, which
-// AppRun adds to LD_LIBRARY_PATH (currently empty on Linux since gpuikit and
+// AppRun adds to LD_LIBRARY_PATH (currently empty on Linux since goui-kit and
 // velopack_libc are statically linked).
 func stageLibraries(appdir string, libraries []library) error {
 	for _, l := range libraries {
@@ -393,7 +393,7 @@ func deploy(appdir, arch string, t tools) error {
 		"--executable", filepath.Join(appdir, "usr/bin/rc2fx"),
 		"--desktop-file", filepath.Join(appdir, "usr/share/applications/rc2fx.desktop"),
 		"--icon-file", filepath.Join(appdir, "usr/share/icons/hicolor/scalable/apps/rc2fx.svg"),
-		// gpuikit links libfreetype.so.6, which linuxdeploy leaves to the
+		// goui-kit links libfreetype.so.6, which linuxdeploy leaves to the
 		// host, but it still bundles freetype's own dependencies from the
 		// build host (AlmaLinux 8: libpng16 and libbz2). The host's freetype
 		// loads its own, so bundled copies only risk a mismatch.

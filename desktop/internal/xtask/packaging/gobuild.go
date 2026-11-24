@@ -1,7 +1,7 @@
 package packaging
 
-// Build the Go desktop app for packaging: links via cgo against the gpuikit
-// static library (desktop/third_party/gpuikit) and Velopack's C library
+// Build the Go desktop app for packaging: links via cgo against the goui-kit
+// static library (desktop/third_party/goui-kit) and Velopack's C library
 // (`velopack` tag, desktop/third_party/velopack), embeds generated license
 // notices via a Go -overlay, and with --embedded includes the mixer payload
 // staged by cmd/stage-payload. Outputs land in target/[TRIPLE/]release (with
@@ -27,6 +27,7 @@ import (
 	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/deps"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -37,12 +38,14 @@ type library struct {
 	data []byte
 }
 
-// gpuikitLibrary is the gpuikit static library's file name, in the
-// download's lib folder on every system (on Windows, MinGW's archive).
-const gpuikitLibrary = "libgpuikit_static.a"
+// StaticTag is the Go build tag that tells package gk to link deps.GouiKitLibrary
+// statically through cgo, allowing the linker to drop unused component
+// families. Without it, package gk looks for a shared library at runtime that
+// our packages do not ship.
+const StaticTag = "gkstatic"
 
 // shippedNames is every library the app loads from beside itself on goos.
-// gpuikit is linked into the executable everywhere.
+// goui-kit is linked into the executable everywhere.
 func shippedNames(goos string) []string {
 	if goos == "windows" {
 		// MSVC-built; linked through its plain C exports (vpkc.go).
@@ -71,20 +74,14 @@ func shippedLibraries(root, goos, goarch, release string) ([]library, error) {
 	return out, nil
 }
 
-// gpuikitDir is the unpacked gpuikit download desktop/third_party/gpuikit
-// links to.
-func gpuikitDir(root string) string {
-	return filepath.Join(root, "desktop", "third_party", "gpuikit")
-}
-
-// findGpuikit is the download's lib folder, which holds the static library.
-func findGpuikit(root string) (string, error) {
-	dir := filepath.Join(gpuikitDir(root), "lib")
-	if info, err := os.Stat(filepath.Join(dir, gpuikitLibrary)); err == nil && info.Mode().IsRegular() {
+// findGouiKit is the download's lib folder, which holds the static library.
+func findGouiKit(root string) (string, error) {
+	dir := filepath.Join(deps.GouiKitDir(root), "lib")
+	if info, err := os.Stat(filepath.Join(dir, deps.GouiKitLibrary)); err == nil && info.Mode().IsRegular() {
 		return dir, nil
 	}
-	return "", task.Errorf("%s is not in %s; fetch the gpuikit download for this platform with desktop/scripts/fetch-gpuikit.sh (desktop/README.md)",
-		gpuikitLibrary, dir)
+	return "", task.Errorf("%s is not in %s; run `./xtask fetch-goui-kit` (or `just setup`)",
+		deps.GouiKitLibrary, dir)
 }
 
 // goArches is the GOARCH of each build one package for goos/goarch needs:
@@ -96,8 +93,8 @@ func goArches(goos, goarch string) []string {
 	return []string{goarch}
 }
 
-// fetchTarget is fetch-velopack.sh's and fetch-gpuikit.sh's target for a
-// package for goos/goarch.
+// fetchTarget returns the target argument for `./xtask fetch-goui-kit` and
+// `./xtask fetch-velopack` for a package targeting goos/goarch.
 func fetchTarget(goos, goarch string) string {
 	if goos == "darwin" {
 		return "darwin-universal"
@@ -105,9 +102,9 @@ func fetchTarget(goos, goarch string) string {
 	return goos + "-" + goarch
 }
 
-// velopackDir is velopack_libc for one build's goos/goarch, fetched by
-// desktop/scripts/fetch-velopack.sh, which must be the version vpk packs
-// with. fetch is the script's target.
+// velopackDir returns the staged velopack_libc directory for one build's
+// goos/goarch, fetched by `./xtask fetch-velopack`, which must match the
+// version vpk packs with. fetch is the target argument passed to that command.
 func velopackDir(root, goos, goarch, fetch string) (string, error) {
 	vpkVersion, err := licenses.VPKVersion(root)
 	if err != nil {
@@ -116,16 +113,16 @@ func velopackDir(root, goos, goarch, fetch string) (string, error) {
 	base := filepath.Join(root, "desktop", "third_party", "velopack")
 	version, err := os.ReadFile(filepath.Join(base, "VERSION"))
 	if err != nil {
-		return "", task.Errorf("%s: %s; run desktop/scripts/fetch-velopack.sh %s",
+		return "", task.Errorf("%s: %s; run `./xtask fetch-velopack %s`",
 			filepath.Join(base, "VERSION"), task.IOError(err), fetch)
 	}
 	if got := strings.TrimSpace(string(version)); got != vpkVersion {
-		return "", task.Errorf("desktop/third_party/velopack is velopack_libc %s, not %s; run desktop/scripts/fetch-velopack.sh %s",
+		return "", task.Errorf("desktop/third_party/velopack is velopack_libc %s, not %s; run `./xtask fetch-velopack %s`",
 			got, vpkVersion, fetch)
 	}
 	dir := filepath.Join(base, goos+"-"+goarch)
 	if _, err := os.Stat(dir); err != nil {
-		return "", task.Errorf("velopack_libc has no %s-%s build in %s; run desktop/scripts/fetch-velopack.sh %s",
+		return "", task.Errorf("velopack_libc has no %s-%s build in %s; run `./xtask fetch-velopack %s`",
 			goos, goarch, base, fetch)
 	}
 	return dir, nil
@@ -138,7 +135,7 @@ func velopackDir(root, goos, goarch, fetch string) (string, error) {
 // are the builder's own and are not checked. vpkc's directives keep the
 // system libraries velopack_libc needs, which follow it on the link line.
 //
-// On Linux velopack_libc and gpuikit are both Rust static libraries, and
+// On Linux velopack_libc and goui-kit are both Rust static libraries, and
 // each carries Rust's unwinding routine under the one unmangled name
 // rust_eh_personality. GNU ld refuses the second copy unless told to keep
 // the first; either copy serves both libraries.
@@ -200,7 +197,7 @@ func lipo(out string, slices []string) error {
 // architecture, joined by lipo.
 func BuildApp(root string, target *string, goos, goarch, documentPath string, embedded bool) error {
 	desktop := filepath.Join(root, "desktop")
-	gpuikit, err := findGpuikit(root)
+	gouikit, err := findGouiKit(root)
 	if err != nil {
 		return err
 	}
@@ -270,13 +267,13 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 	if goos == "windows" {
 		exe += ".exe"
 	}
-	tags := "velopack"
+	tags := "velopack," + StaticTag
 	if embedded {
 		tags += ",embedded"
 	}
-	// No symbol table or debug information: gpuikit's symbol table alone is
+	// No symbol table or debug information: goui-kit's symbol table alone is
 	// over 20 MB, and Go's stack traces work without either.
-	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, "-s -w")
+	ldflags, cgoLDFlags := appLinkFlags(goos, gouikit, "-s -w")
 	var built []string
 	for _, arch := range arches {
 		out := exe
@@ -329,13 +326,13 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 }
 
 // CheckUILink verifies that ./cmd/rc2fx links with the release Velopack and
-// gpuikit linker flags (appLinkFlags + velopackLinkFlags + buildEnv) for the
+// goui-kit linker flags (appLinkFlags + velopackLinkFlags + buildEnv) for the
 // host platform (both arm64 and amd64 slices on macOS), without duplicating
 // those flags in CI workflows.
 func CheckUILink(outDir string) error {
 	root := task.Root()
 	desktop := filepath.Join(root, "desktop")
-	gpuikit, err := findGpuikit(root)
+	gouikit, err := findGouiKit(root)
 	if err != nil {
 		return err
 	}
@@ -354,7 +351,7 @@ func CheckUILink(outDir string) error {
 	} else if err := os.MkdirAll(outDir, 0o777); err != nil {
 		return task.Error(task.IOError(err))
 	}
-	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, "-s -w")
+	ldflags, cgoLDFlags := appLinkFlags(goos, gouikit, "-s -w")
 	for _, arch := range arches {
 		vpk, err := velopackDir(root, goos, arch, fetchTarget(goos, goarch))
 		if err != nil {
@@ -366,7 +363,7 @@ func CheckUILink(outDir string) error {
 		} else if goos == "windows" {
 			name += ".exe"
 		}
-		build := exec.Command("go", "build", "-tags", "velopack", "-ldflags", ldflags, "-o", filepath.Join(outDir, name), "./cmd/rc2fx")
+		build := exec.Command("go", "build", "-tags", "velopack,"+StaticTag, "-ldflags", ldflags, "-o", filepath.Join(outDir, name), "./cmd/rc2fx")
 		build.Dir = desktop
 		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(goos, vpk))
 		if err := task.Run(build); err != nil {
@@ -377,12 +374,12 @@ func CheckUILink(outDir string) error {
 }
 
 // NonUIPackages prints every Go package under desktop/ that does not depend
-// on gpuikit.dev/gk, one per line. Both `just test` and CI call this so the
+// on github.com/ibanks42/goui-kit/gk, one per line. Both `just test` and CI call this so the
 // package filter is defined in one place.
 func NonUIPackages() error {
 	desktop := filepath.Join(task.Root(), "desktop")
 	cmd := exec.Command("go", "list", "-e", "-f",
-		`{{$ui := false}}{{range .Deps}}{{if eq . "gpuikit.dev/gk"}}{{$ui = true}}{{end}}{{end}}{{if not $ui}}{{.ImportPath}}{{end}}`,
+		`{{$ui := false}}{{range .Deps}}{{if eq . "github.com/ibanks42/goui-kit/gk"}}{{$ui = true}}{{end}}{{end}}{{if not $ui}}{{.ImportPath}}{{end}}`,
 		"./...")
 	cmd.Dir = desktop
 	out, err := cmd.Output()
@@ -413,7 +410,7 @@ func copyLibrary(from, to string) error {
 // window loads icon 1. The application manifest
 // (common controls 6, without which the program does not start, and
 // per-monitor DPI awareness) is not among them: package gk links its own
-// (gpuikit_windows_amd64.syso), and the linker keeps that one over MinGW's
+// (gouikit_windows_amd64.syso), and the linker keeps that one over MinGW's
 // default (appLinkFlags' -force:multipleres). It compiles them with windres
 // (RC2FX_WINDRES, or x86_64-w64-mingw32-windres or windres on PATH) into
 // desktop/cmd/rc2fx/rsrc_windows_amd64.syso, which the caller removes after

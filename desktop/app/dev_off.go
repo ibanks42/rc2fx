@@ -2,7 +2,7 @@
 
 package app
 
-import "gpuikit.dev/gk"
+import "github.com/ibanks42/goui-kit/gk"
 
 // No-op stubs for development-only hooks in non-dev builds.
 

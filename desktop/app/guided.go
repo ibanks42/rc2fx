@@ -6,8 +6,9 @@ package app
 import (
 	"fmt"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 )
@@ -20,8 +21,8 @@ type guidedTask struct {
 	bottom    gk.Element
 	scroll    gk.ScrollHandle
 	unplug    installflow.Unplug
-	secondary []gk.ButtonEl
-	primary   gk.ButtonEl
+	secondary []kit.ButtonEl
+	primary   kit.ButtonEl
 }
 
 const (
@@ -98,8 +99,8 @@ func stepCount(stage, total int) string {
 	return fmt.Sprintf("Step %d of %d", stage+1, total)
 }
 
-func taskButton(id gk.ID, label string, primary bool) gk.ButtonEl {
-	b := gk.Button(id)
+func taskButton(id gk.ID, label string, primary bool) kit.ButtonEl {
+	b := kit.Button(id)
 	if primary {
 		b = b.Primary().FontSemibold()
 	} else {

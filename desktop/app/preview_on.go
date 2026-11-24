@@ -8,8 +8,9 @@ package app
 import (
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
@@ -140,9 +141,9 @@ func (p *telemetryPreview) view(cx *gk.Cx) gk.Element {
 	snapshot := previewSnapshot(p.reported, p.details)
 	aside := gk.HFlex(s.ItemsCenter, s.Gap3).
 		Child(gk.Div(s.TextXs).TextColor(rgb(Faint)).Child(txt("Live · " + telemetry.SinceLabel(since, epoch)))).
-		Child(gk.Button("show-events").Outline().Small().Icon(gk.IconExternalLink).Label("Events")).
+		Child(kit.Button("show-events").Outline().Small().Icon(gk.IconExternalLink).Label("Events")).
 		Child(resetControl("telemetry-reset", "Reset…", false, true, noop, noop, noop))
-	toggle := gk.Switch("telemetry-details").Small().Checked(p.details).Label("Technical details").
+	toggle := kit.Switch("telemetry-details").Small().Checked(p.details).Label("Technical details").
 		OnClick(func(cx *gk.Cx, on bool) { p.details = on })
 	return gk.Div(s.SizeFull, s.Px6, s.Py5).Bg(rgb(surface().Bg)).TextColor(rgb(Text)).
 		ID("telemetry-preview").OverflowYScroll().
