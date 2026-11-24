@@ -2,6 +2,20 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.2.4] - 2026-11-24
+
+### Documentation
+
+- Clean up documentation and code comments
+
+### Maintenance
+
+- Trim release assets and simplify workflows
+- *(desktop)* Upgrade to goui-kit 0.11 (#6)
+- *(xtask)* Move dev scripts into xtask and xtask into tools/xtask (#7)
+- *(lint)* Pin dev tools with mise and lint every language (#8)
+- *(lint)* Silence ruff on success and print per-language summary
+
 ## [0.2.3] - 2026-11-23
 
 ### Bug fixes
