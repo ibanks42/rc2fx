@@ -16,9 +16,10 @@ import (
 // CargoAboutVersion is the cargo-about version pinned by the release workflows.
 const CargoAboutVersion = "0.8.4"
 
-// packagingTools installs what `go -C tools/xtask run . package` needs beyond the
-// libraries: cargo-about, vpk, and on Linux linuxdeploy, patchelf, mksquashfs,
-// and the AppImage runtime notices, at the versions the release workflows use.
+// packagingTools prepares what `go -C tools/xtask run . package` needs beyond
+// the libraries: it installs cargo-about and vpk, and on Linux checks for
+// linuxdeploy and patchelf (pinned in mise.toml), installs mksquashfs when
+// missing, and generates the AppImage runtime notices.
 func packagingTools(root string) error {
 	if err := installCargoAbout(); err != nil {
 		return err

@@ -2,9 +2,10 @@ name: Check
 
 # Linux-only Rust workspace (including rc2fxd, standalone benchmark, and optional
 # bench-kernels feature) runs in the AlmaLinux 8 release image. AArch64
-# audio crates run natively on an Arm runner. Go desktop and xtask are vetted and
-# tested across all shipped platforms, plus an AlmaLinux cgo build. Tooling runs
-# the Python and C test suites on the host.
+# audio crates run natively on an Arm runner. Formatting and lints for every
+# language run in the lint job using the tools pinned in mise.toml. Go desktop
+# and xtask are vetted and tested across all shipped platforms, plus an
+# AlmaLinux cgo build. Tooling runs the Python and C test suites on the host.
 on:
   push:
     branches: [main]

@@ -168,5 +168,7 @@ covers the UI packages as well. `app/uitest` runs offscreen UI tests when
 `RC2FX_GOUIKIT_DIAG` points to a directory containing goui-kit's diagnostic
 library, and skips them otherwise. Prebuilt downloads don't include that
 library; build it from the `goui-kit` repository (`make lib`, then its
-`lib/diag`). `just test` runs the full Go suite (including `gofmt`, `go vet`,
-and `go test` on `tools/xtask`) followed by the Rust workspace tests on Linux.
+`lib/diag`). `just test` runs the schema check, `just lint` (including `gofmt`
+across Go files and formatting/lint checks for the other languages), and the
+full Go suite (`go vet` and `go test` on `desktop/` and `tools/xtask/`),
+followed by the Rust workspace tests and Clippy on Linux.

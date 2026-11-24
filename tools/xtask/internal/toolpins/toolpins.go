@@ -54,7 +54,7 @@ var (
 	pinLine   = regexp.MustCompile(`^\s*("[^"]+"|[A-Za-z0-9_.:/-]+)\s*=\s*(?:"([^"]+)"|\{.*\bversion\s*=\s*"([^"]+)".*\})\s*$`)
 )
 
-// Pins reads tool versions from the [tools] table of mise.toml.
+// Pins reads and caches tool versions from the [tools] table of mise.toml.
 func Pins() (map[string]string, error) {
 	pinsOnce.Do(func() {
 		path := filepath.Join(task.Root(), "mise.toml")
@@ -107,9 +107,10 @@ func Pin(tool Tool) (string, error) {
 	return version, nil
 }
 
-// Find returns the path of tool's command: from PATH, else from mise when
-// mise has it installed but is not activated in this shell. It warns once
-// when that command's version differs from the pin.
+// Find returns the path of tool's command: from PATH, or from mise when mise
+// has it installed but is not activated in this shell (prepending its
+// directory to PATH so child processes find it too). It warns once per command
+// when the version output does not contain the pin.
 func Find(tool Tool) (string, error) {
 	pin, err := Pin(tool)
 	if err != nil {
@@ -117,8 +118,8 @@ func Find(tool Tool) (string, error) {
 	}
 	path, err := exec.LookPath(tool.Command)
 	if err != nil {
-		// Found through mise, so put it on PATH for the commands this
-		// starts too (cargo-zigbuild runs zig, linuxdeploy runs patchelf).
+		// Found through mise, so prepend its directory to PATH for
+		// subprocesses too (cargo-zigbuild runs zig, linuxdeploy runs patchelf).
 		if path = miseWhich(tool.Command); path != "" {
 			os.Setenv("PATH", filepath.Dir(path)+string(os.PathListSeparator)+os.Getenv("PATH"))
 		}
@@ -139,7 +140,8 @@ func Find(tool Tool) (string, error) {
 	return path, nil
 }
 
-// miseWhich is the path mise installed command at, or "".
+// miseWhich returns the path mise installed command at, or "" if mise is not on
+// PATH or has not installed command.
 func miseWhich(command string) string {
 	if _, err := exec.LookPath("mise"); err != nil {
 		return ""

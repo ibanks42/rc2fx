@@ -61,16 +61,18 @@ unless you opt in.
 
 The desktop app is written in Go, and the mixer runtime is Rust. You'll need
 [Go](https://go.dev/dl/) (the version in `desktop/go.mod`), a C compiler for
-cgo (MinGW-w64 gcc on Windows), Rust ([rustup](https://rustup.rs)),
-[zig](https://ziglang.org/download/) 0.13+, and [just](https://just.systems)
+cgo (MinGW-w64 gcc on Windows), Rust ([rustup](https://rustup.rs)), and either
+[mise](https://mise.jdx.dev) (optional, installs the pinned `just`, `zig`,
+linters, and Linux packaging tools from `mise.toml`) or
+[zig](https://ziglang.org/download/) and [just](https://just.systems) on `PATH`
 ([details](docs/developer/building.md)).
 
 ```sh
 git clone https://github.com/ibanks42/rc2fx
 cd rc2fx
-just setup          # once: libraries, mixer build tools, packaging tools, and git hook
+just setup          # once: libraries, pinned tools, mixer build tools, packaging tools, and git hook
 just app            # run the desktop app (dev build)
-just test           # run Go tests/vet (and Rust tests/clippy on Linux)
+just test           # run lints, Go tests/vet (and Rust tests/clippy on Linux)
 just mixer-build    # cross-build the mixer runtime into target/mixer
 ```
 

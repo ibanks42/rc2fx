@@ -11,8 +11,9 @@ entitlements) live in `packaging/`.
 You'll need Go 1.27 (matching `go.mod`), a C compiler (cgo is used for the UI,
 storage repair, and Velopack), and the goui-kit static library. Run `just setup`
 from the repository root to install everything needed to build, package, and run
-the app (goui-kit, Velopack's C library, `cargo-about`, `vpk`, and on Linux the
-AppImage tools and notices, alongside the mixer build tools and formatting
+the app (goui-kit, Velopack's C library, the command-line tools pinned in
+`mise.toml` when `mise` is installed, `cargo-about`, `vpk`, Linux packaging
+setup and AppImage notices, the mixer build tools, and the pre-commit lint
 hook). Running `just setup` again skips downloads and tools that are already
 current. To
 fetch goui-kit on its own (for CI or another platform, such as
@@ -43,7 +44,7 @@ From the repository root, use the standard entry points:
 ```sh
 just app              # go -C tools/xtask run . app: development build in target/debug, then run it
 just app-mock         # go -C tools/xtask run . app --mock: against a simulated mixer
-just test             # Go vet and tests, then the Rust workspace (on Linux)
+just test             # schema check, lints, Go vet and tests, then the Rust workspace (on Linux)
 just package          # go -C tools/xtask run . package: release packages in target/package
 ```
 

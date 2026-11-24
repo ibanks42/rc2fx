@@ -320,8 +320,10 @@ parallel and publishes only once every package is verified.
    [local package checks](building.md#check-the-linux-packages-before-a-release)),
    pulling the prebuilt AlmaLinux 8 build image instead of building it locally.
    Building inside AlmaLinux 8 keeps the glibc requirement at 2.28 regardless
-   of the GitHub runner's OS. The container installs the same vpk, generates
-   AppImage runtime notices and sources, and packages the AppImage. It then
+   of the GitHub runner's OS. The container uses its checksum-verified `mise`
+   binary to run `mise install --locked` for `linuxdeploy` and `patchelf`,
+   installs the same `vpk`, generates AppImage runtime notices and sources, and
+   packages the AppImage. It then
    extracts and tests the AppImage inside clean containers of AlmaLinux 8,
    Ubuntu 22.04, Debian 12, Ubuntu 24.04, Debian 13, and Fedora 44, checking
    shared libraries, metadata, permissions, payload mode, and a headless smoke
@@ -368,8 +370,14 @@ Fixing either one requires cutting a new version.
 The **Check** workflow lints, tests, and audits pushes and pull requests to
 `main` (skipping docs-only changes) and runs the release script tests:
 
+- **lint** runs on Ubuntu with Go, Rust (`rustfmt` from `rust-toolchain.toml`),
+  and the pinned linters from `mise.toml` (`ruff`, `shellcheck`, `shfmt`,
+  `actionlint`, and `conda:clang-format`) installed via `jdx/mise-action`. It
+  runs `go -C tools/xtask run . lint` to check formatting and lints across Go,
+  Rust, Python, C, shell, and GitHub workflows (failing if any tool is
+  missing).
 - **desktop** checks the Go app and `tools/xtask` on Ubuntu, Windows, and
-  macOS: `gofmt` across both modules, schema check, and a check that
+  macOS: schema check and a check that
   `tools/xtask` stays pure Go and runs on Linux; `go vet` and `go test` on all
   non-UI `desktop/` packages
   (everything except `app` and `cmd/rc2fx`), `transport` tests with
@@ -388,21 +396,26 @@ The **Check** workflow lints, tests, and audits pushes and pull requests to
 - **desktop-alma** builds the app and tests the installer (with vendored
   libext2fs) inside the same AlmaLinux 8 container used for AppImage builds.
 
-Rust formatting, linting, and tests also run on Linux inside the AlmaLinux 8
-image. The Linux CI job builds without debug info and with unoptimized
+Rust Clippy lints and tests also run on Linux inside the AlmaLinux 8
+image (with native AArch64 audio crate checks in **mixer-arm64**). The Linux CI
+job builds without debug info and with unoptimized
 dependencies (`.github/cargo-ci.toml`), more than halving cold build times. Only
 `main` runs save Rust and Go build caches; PRs read from them, and a
 twice-weekly scheduled run keeps caches warm.
 
 The **Build image** workflow builds and pushes
-`.github/scripts/package-check.Containerfile` to
+`.github/scripts/package-check.Containerfile` (which includes a checksum-verified
+static `mise` binary for `mise install --locked` during AppImage builds) to
 `ghcr.io/ibanks42/rc2fx-build`. Its tag is derived from a digest of the
 Containerfile and `rust-toolchain.toml` (`go -C tools/xtask run . build-image-tag`),
 so **Check** and **Release** only rebuild it when one of those changes. A
 weekly scheduled run (or manual dispatch) refreshes the current tag so system
 packages and bundled AppImage libraries pick up updates. Release preparation
 also test-builds the docs before publishing, so disabling automatic docs
-deployment on push never skips docs validation.
+deployment on push never skips docs validation. **Mixer release**
+(`.github/workflows/mixer-release.yml`) installs the pinned `zig` from
+`mise.toml` via `jdx/mise-action` alongside `cargo-zigbuild` and `cargo-about`
+to cross-build the mixer payload (see [Mixer releases](mixer-releases.md)).
 
 ## Signing
 

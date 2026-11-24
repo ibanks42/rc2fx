@@ -34,7 +34,8 @@ const ZigTarget = "aarch64-unknown-linux-gnu.2.35"
 
 // Run installs everything needed to build, package, and run the desktop
 // app and to build the mixer side: the goui-kit and Velopack libraries, the
-// Rust target, cargo-zigbuild, and the packaging tools, and checks for zig.
+// Rust target, mise.toml's pinned tools (when mise is installed),
+// cargo-zigbuild, and the packaging tools, and checks for zig.
 func Run() error {
 	if err := deps.FetchGouiKit(""); err != nil {
 		return err

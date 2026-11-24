@@ -8,7 +8,7 @@ xtask := "go -C tools/xtask run ."
 default:
     @just --list --unsorted
 
-# One-time setup for building, packaging, and running the app and building the mixer: the goui-kit and Velopack libraries, the Rust target, cargo-zigbuild, cargo-about, vpk, the Linux AppImage tools and notices, a zig check, and the pre-commit formatting hook
+# One-time setup for building, packaging, and running the app and building the mixer: the goui-kit and Velopack libraries, the Rust target, pinned tools via mise (when installed), cargo-zigbuild, cargo-about, vpk, a zig check, Linux packaging checks/mksquashfs/notices, and the pre-commit lint hook
 setup:
     {{ xtask }} setup
     git config core.hooksPath .githooks

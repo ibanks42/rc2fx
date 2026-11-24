@@ -1,8 +1,10 @@
-// Package lint checks (and with --fix, formats) every language in the
-// repository with one command: Go (gofmt), Rust (rustfmt), Python (ruff),
-// C (clang-format), shell (shfmt and shellcheck), and GitHub workflows
-// (actionlint). The tools come from mise.toml (see package toolpins); a
-// missing one is skipped with a warning, except in CI, where it fails.
+// Package lint checks (and with --fix, formats and applies safe ruff lint
+// fixes for) every language in the repository with one command: Go (gofmt),
+// Rust (rustfmt), Python (ruff), C (clang-format), shell (shfmt and
+// shellcheck), and GitHub workflows (actionlint). Go and Rust use gofmt and
+// cargo fmt from PATH; the other tools come from mise.toml (see package
+// toolpins). A missing tool is skipped with a warning, except in CI (when CI is
+// set), where it fails.
 package lint
 
 import (
@@ -33,8 +35,8 @@ type options struct {
 type language struct {
 	name  string
 	match func(name string, head []byte) bool
-	// whole runs once whenever any of the language's files is selected,
-	// for tools that check a whole project (rustfmt).
+	// whole marks languages whose runner checks whole workspaces rather
+	// than individual selected files (rustfmt).
 	whole bool
 	run   func(o options, files []string) error
 }
@@ -102,8 +104,9 @@ func Run(args []string) error {
 	return nil
 }
 
-// candidates lists the repository's files, or only the staged ones,
-// relative to the repository root (the working directory).
+// candidates lists regular files in the repository (tracked and non-ignored
+// untracked), or only staged added/copied/modified/renamed ones, relative to
+// the repository root (the working directory).
 func candidates(staged bool) ([]string, error) {
 	args := []string{"ls-files", "-z", "--cached", "--others", "--exclude-standard"}
 	if staged {
@@ -279,7 +282,8 @@ func runWorkflows(_ options, files []string) error {
 	if err != nil {
 		return err
 	}
-	// actionlint checks run: scripts with shellcheck when it can find it.
+	// Pass shellcheck explicitly when found so actionlint checks `run:`
+	// scripts even if shellcheck lives in mise rather than on PATH.
 	command := exec.Command(actionlint, files...)
 	if shellcheck, err := toolpins.Find(toolpins.Shellcheck); err == nil {
 		command.Args = append([]string{actionlint, "-shellcheck", shellcheck}, files...)
