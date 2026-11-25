@@ -27,6 +27,8 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 commit_parsers = [
+  # Website-only changes (scope "site") stay out of the changelog.
+  { message = "^[a-z]+\\(site\\)", skip = true },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug fixes" },
   { message = "^refactor", group = "<!-- 2 -->Refactoring" },
