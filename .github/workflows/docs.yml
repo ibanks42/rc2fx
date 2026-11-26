@@ -11,6 +11,7 @@ on:
         default: main
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -68,6 +69,22 @@ jobs:
         with:
           name: github-pages-${{ github.run_attempt }}
           path: target/docs
+      # The run's artifact list can lag the upload by a moment, and
+      # deploy-pages fails at once if the artifact isn't listed yet.
+      - name: Wait for the artifact to be listed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT: github-pages-${{ github.run_attempt }}
+        run: |
+          for _ in $(seq 30); do
+            count=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts?name=$ARTIFACT" --jq .total_count)
+            if [ "$count" -gt 0 ]; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::$ARTIFACT was not listed after 30 s"
+          exit 1
 
       - id: deployment
         uses: actions/deploy-pages@v5.0.1
