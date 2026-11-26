@@ -159,7 +159,7 @@ func TestRequestAndReplyJSON(t *testing.T) {
 		t.Fatalf("got %s want %s", got, want)
 	}
 	got, _ = Request{Method: "GET", Path: "p"}.MarshalJSON()
-	if string(got) != `{"method":"GET","path":"p","body":null}` {
+	if string(got) != `{"method":"GET","path":"p"}` {
 		t.Fatalf("got %s", got)
 	}
 	var back Request

@@ -28,6 +28,19 @@ type mixer struct {
 	loseFetches  int
 	// window is protocol 4's; 0 for a mixer that speaks only protocol 3.
 	window int
+	// five is whether the mixer speaks protocol 5; shortSession is whether
+	// the client negotiated it, sizes lists every report length written, and
+	// ids lists every report ID written.
+	five         bool
+	shortSession bool
+	sizes        []int
+	ids          []byte
+	// refuseShort makes Write fail every report 64 write, like a host API or
+	// descriptor that rejects short output reports.
+	refuseShort bool
+	// loseHellos silently drops the first N hello frames (simulating a USB
+	// DATA0/DATA1 toggle resync discard after an earlier write timeout).
+	loseHellos int
 	// loseReport drops this fetch reply report (by index), once.
 	loseReport *int
 	acks       *atomic.Int64
@@ -37,7 +50,7 @@ func newMixer() *mixer {
 	return &mixer{writes: new(atomic.Int64), acks: new(atomic.Int64)}
 }
 
-func (m *mixer) answer(f *usbproto.Frame, kind usbproto.Kind, offset, total int, data []byte) {
+func (m *mixer) answer(f *usbproto.Frame, compact bool, kind usbproto.Kind, offset, total int, data []byte) {
 	if kind == usbproto.KindAck {
 		m.acks.Add(1)
 	}
@@ -45,7 +58,12 @@ func (m *mixer) answer(f *usbproto.Frame, kind usbproto.Kind, offset, total int,
 	m.inbox = append(m.inbox, []byte{2, 'A'})
 	for _, session := range []uint64{f.Session + 1, f.Session} {
 		frame := usbproto.Frame{Kind: kind, Session: session, Request: f.Request, Offset: offset, Total: total, Data: data}
-		encoded := frame.Encode(usbproto.InputID)
+		var encoded [usbproto.ReportSize]byte
+		if compact {
+			encoded = frame.EncodeCompactIn()
+		} else {
+			encoded = frame.Encode(usbproto.InputID)
+		}
 		m.inbox = append(m.inbox, bytes.Clone(encoded[:]))
 	}
 }
@@ -55,19 +73,44 @@ func (m *mixer) Write(report []byte, _ time.Duration) (int, error) {
 	if m.short {
 		return len(report) - 1, nil
 	}
-	f, ok := usbproto.DecodeFrame(report, usbproto.OutputID)
+	if m.refuseShort && len(report) > 0 && report[0] == usbproto.CompactOutputID {
+		return 0, errors.New("the parameter is incorrect")
+	}
+	m.sizes = append(m.sizes, len(report))
+	if len(report) > 0 {
+		m.ids = append(m.ids, report[0])
+	}
+	var f usbproto.Frame
+	var ok bool
+	compact := len(report) > 0 && report[0] == usbproto.CompactOutputID
+	if compact {
+		// On Windows the buffer is zero-padded to 256 bytes and hidclass sends
+		// the first 62 bytes on the wire.
+		f, ok = usbproto.DecodeCompactFrame(report[:usbproto.CompactOutSize], usbproto.CompactOutputID)
+	} else {
+		f, ok = usbproto.DecodeFrame(report, usbproto.OutputID)
+	}
 	if !ok {
 		panic("undecodable host report")
 	}
 	switch f.Kind {
 	case usbproto.KindHello:
+		if m.loseHellos > 0 {
+			m.loseHellos--
+			break
+		}
 		switch {
-		case len(f.Data) == 0:
-			m.answer(&f, usbproto.KindAck, 0, 0, []byte(usbproto.Hello3))
-		case string(f.Data) == usbproto.Hello4 && m.window > 0:
-			m.answer(&f, usbproto.KindAck, 0, 0, []byte(fmt.Sprintf("RC2FX USB 4 %d", m.window)))
+		case !compact && len(f.Data) == 0:
+			m.shortSession = false
+			m.answer(&f, false, usbproto.KindAck, 0, 0, []byte(usbproto.Hello3))
+		case !compact && string(f.Data) == usbproto.Hello4 && m.window > 0:
+			m.shortSession = false
+			m.answer(&f, false, usbproto.KindAck, 0, 0, []byte(fmt.Sprintf("RC2FX USB 4 %d", m.window)))
+		case compact && string(f.Data) == usbproto.Hello5 && m.five && m.window > 0:
+			m.shortSession = true
+			m.answer(&f, true, usbproto.KindAck, 0, 0, []byte(fmt.Sprintf("RC2FX USB 5 %d", m.window)))
 		default:
-			m.answer(&f, usbproto.KindError, 0, 0, []byte("Invalid USB hello"))
+			m.answer(&f, compact, usbproto.KindError, 0, 0, []byte("Invalid USB hello"))
 		}
 	case usbproto.KindRequest:
 		message, err := m.assembly.Push(&f, usbproto.MaxRequest)
@@ -78,29 +121,37 @@ func (m *mixer) Write(report []byte, _ time.Duration) (int, error) {
 		if done {
 			m.executed++
 		}
-		end := (f.Offset + len(f.Data)) / usbproto.Payload
+		payload := usbproto.Payload
+		if m.shortSession {
+			payload = usbproto.CompactOutPayload
+		}
+		end := (f.Offset + len(f.Data)) / payload
 		windowed := m.window > 0 && !done && end%m.window != 0
 		if !windowed && !(done && m.loseFinalAck) {
-			m.answer(&f, usbproto.KindAck, f.Offset+len(f.Data), f.Total, nil)
+			m.answer(&f, compact, usbproto.KindAck, f.Offset+len(f.Data), f.Total, nil)
 		}
 	case usbproto.KindFetch:
 		switch {
 		case m.executed == 0:
-			m.answer(&f, usbproto.KindError, 0, 0, []byte("Invalid USB control packet"))
+			m.answer(&f, compact, usbproto.KindError, 0, 0, []byte("Invalid USB control packet"))
 		case m.loseFetches > 0:
 			m.loseFetches--
 		default:
+			inPayload := usbproto.Payload
+			if compact {
+				inPayload = usbproto.CompactInPayload
+			}
 			offset := f.Offset
 			for range max(f.Total, 1) {
 				if offset >= len(m.reply) {
 					break
 				}
-				end := min(offset+usbproto.Payload, len(m.reply))
-				index := offset / usbproto.Payload
+				end := min(offset+inPayload, len(m.reply))
+				index := offset / inPayload
 				if m.loseReport != nil && *m.loseReport == index {
 					m.loseReport = nil
 				} else {
-					m.answer(&f, usbproto.KindReply, offset, len(m.reply), m.reply[offset:end])
+					m.answer(&f, compact, usbproto.KindReply, offset, len(m.reply), m.reply[offset:end])
 				}
 				offset = end
 			}
@@ -156,6 +207,8 @@ func client(t *testing.T, m *mixer) *Client {
 		model:       &model,
 		nonce:       5,
 		window:      1,
+		payload:     usbproto.Payload,
+		inPayload:   usbproto.Payload,
 		reportWait:  20 * time.Millisecond,
 		executeWait: 20 * time.Millisecond,
 	}
@@ -322,24 +375,92 @@ func TestOnlyTheSingleMixerControlInterfaceIsChosen(t *testing.T) {
 	}
 }
 
-// windowed is a protocol 4 client, negotiated with a mixer whose window is
-// window.
+// windowed is a negotiated client against m (compact reports 64/65 when m.five is set).
 func windowed(t *testing.T, window int, m *mixer) *Client {
 	m.window = window
 	c := client(t, m)
-	if err := c.negotiate(); err != nil {
+	if err := c.negotiate(m.five); err != nil {
 		t.Fatal(err)
 	}
 	return c
 }
 
 func TestProtocol4IsNegotiatedAnd3IsTheFallback(t *testing.T) {
-	if v4 := windowed(t, 8, newMixer()); v4.window != 8 {
+	if v4 := windowed(t, 8, newMixer()); v4.window != 8 || v4.compact {
 		t.Fatal(v4.window)
 	}
 	v3 := client(t, newMixer())
-	if err := v3.negotiate(); err != nil || v3.window != 1 {
+	if err := v3.negotiate(false); err != nil || v3.window != 1 || v3.compact {
 		t.Fatalf("%v %d", err, v3.window)
+	}
+}
+
+func TestProtocol5UsesCompactReports64And65IncludingHello(t *testing.T) {
+	m := newMixer()
+	m.five = true
+	c := windowed(t, 4, m)
+	if !c.compact || c.payload != usbproto.CompactOutPayload || c.inPayload != usbproto.CompactInPayload || c.window != 4 {
+		t.Fatalf("compact %v, payload %d/%d, window %d", c.compact, c.payload, c.inPayload, c.window)
+	}
+	wantSize := usbproto.CompactOutSize
+	if padShortWrites {
+		wantSize = usbproto.ReportSize
+	}
+	// Even Hello went out on report 64 (never a 256-byte legacy report).
+	if len(m.ids) != 1 || m.ids[0] != usbproto.CompactOutputID || m.sizes[0] != wantSize {
+		t.Fatalf("hello ids=%v sizes=%v", m.ids, m.sizes)
+	}
+	m.sizes, m.ids = nil, nil
+	request := apply(t)
+	reply, err := c.Request(request)
+	if err != nil || reply.Status != 200 {
+		t.Fatal(err)
+	}
+	if len(m.sizes) < 10 {
+		t.Fatalf("only %d reports for a %d-byte request", len(m.sizes), len(request.Body))
+	}
+	for i, size := range m.sizes {
+		if size != wantSize || m.ids[i] != usbproto.CompactOutputID {
+			t.Fatalf("report %d: id %d len %d, want id %d len %d", i, m.ids[i], size, usbproto.CompactOutputID, wantSize)
+		}
+	}
+	// A bodyless GET api/v1/events fits in a single report 64 packet.
+	m.sizes, m.ids = nil, nil
+	if reply, err := c.Request(&Request{Method: "GET", Path: eventsPath}); err != nil || reply.Status != 200 {
+		t.Fatal(err)
+	}
+	// 1 request packet + 1 fetch packet (reply fits in 1 fetch burst).
+	if len(m.ids) != 2 {
+		t.Fatalf("GET events sent %d OUT reports (%v), want 2 (1 request + 1 fetch)", len(m.ids), m.ids)
+	}
+	// A mixer without compact reports negotiates protocol 4 on legacy reports 5/6.
+	old := windowed(t, 4, newMixer())
+	if old.compact || old.payload != usbproto.Payload || old.inPayload != usbproto.Payload || old.window != 4 {
+		t.Fatalf("compact %v, payload %d/%d, window %d", old.compact, old.payload, old.inPayload, old.window)
+	}
+}
+
+func TestRefusedCompactReportsFallBackToLegacyProtocol4(t *testing.T) {
+	m := newMixer()
+	m.five, m.refuseShort = true, true
+	c := windowed(t, 4, m)
+	if !c.fullOnly || c.compact || c.payload != usbproto.Payload {
+		t.Fatalf("expected legacy fallback: fullOnly=%v compact=%v payload=%d", c.fullOnly, c.compact, c.payload)
+	}
+	if reply, err := c.Request(apply(t)); err != nil || reply.Status != 200 {
+		t.Fatal(err)
+	}
+	// Once a compact report has gone through, a later failure is a USB error
+	// and protocol 5 stays.
+	m = newMixer()
+	m.five = true
+	c = windowed(t, 4, m)
+	if reply, err := c.Request(apply(t)); err != nil || reply.Status != 200 {
+		t.Fatal(err)
+	}
+	m.refuseShort = true
+	if _, err := c.Request(apply(t)); err == nil || c.fullOnly {
+		t.Fatalf("%v, full only %v", err, c.fullOnly)
 	}
 }
 
@@ -364,6 +485,16 @@ func TestProtocol4AcknowledgesOncePerWindow(t *testing.T) {
 	v4 := acks.Load()
 	if !(v3 > 4 && v4 == (v3+3)/4) {
 		t.Fatalf("acks: v3 %d, v4 %d", v3, v4)
+	}
+}
+
+func TestProtocol5RetriesIdempotentHelloOnceAfterToggleDiscard(t *testing.T) {
+	m := newMixer()
+	m.five = true
+	m.loseHellos = 1
+	c := windowed(t, 4, m)
+	if !c.compact || c.window != 4 || len(m.ids) != 2 {
+		t.Fatalf("compact=%v window=%d writes=%v", c.compact, c.window, m.ids)
 	}
 }
 

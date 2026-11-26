@@ -13,22 +13,26 @@ import (
 
 // HID describes a RØDE HID top-level collection.
 type HID struct {
-	Path    string `json:"path"`
-	Serial  string `json:"serial"`
-	PID     uint16 `json:"pid"`
-	Usage   uint16 `json:"usage"` // HID usage page
-	Input   int    `json:"input"`
-	Output  int    `json:"output"`
-	Control bool   `json:"control"` // true when SetControlProbe matched custom control reports
-	Release uint16 `json:"release"` // USB bcdDevice (e.g. 0x0177 for firmware 1.7.7)
+	Path           string `json:"path"`
+	Serial         string `json:"serial"`
+	PID            uint16 `json:"pid"`
+	Usage          uint16 `json:"usage"` // HID usage page
+	Input          int    `json:"input"`
+	Output         int    `json:"output"`
+	Control        bool   `json:"control"`                  // true when SetControlProbe matched RC2FX control reports
+	CompactControl bool   `json:"compactControl,omitempty"` // true when compact reports (64/65) are declared
+	Release        uint16 `json:"release"`                  // USB bcdDevice (e.g. 0x0177 for firmware 1.7.7)
 }
 
-// ControlProbe detects application-specific HID control reports for HID.Control.
-// Linux/macOS inspect the raw report descriptor; Windows checks OutputID/InputID.
+// ControlProbe detects application-specific HID control reports for HID.Control
+// and HID.CompactControl. Linux/macOS inspect the raw report descriptor;
+// Windows checks OutputID/InputID and CompactOutputID/CompactInputID.
 type ControlProbe struct {
-	Descriptor func(descriptor []byte) bool
-	OutputID   byte
-	InputID    byte
+	Descriptor      func(descriptor []byte) (control, compact bool)
+	OutputID        byte
+	InputID         byte
+	CompactOutputID byte
+	CompactInputID  byte
 }
 
 var probe struct {
@@ -50,9 +54,12 @@ func controlProbe() (ControlProbe, bool) {
 	return probe.value, probe.set
 }
 
-func declaresControl(descriptor []byte) bool {
+func declaresControl(descriptor []byte) (control, compact bool) {
 	p, ok := controlProbe()
-	return ok && p.Descriptor != nil && p.Descriptor(descriptor)
+	if !ok || p.Descriptor == nil {
+		return false, false
+	}
+	return p.Descriptor(descriptor)
 }
 
 type Volume struct {

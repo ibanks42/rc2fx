@@ -129,9 +129,13 @@ func inspectHID(device windows.Handle, name string) (*HID, error) {
 	// The application's reports sit in RØDE's collection; their presence is
 	// its layout.
 	p, probed := controlProbe()
-	control := probed && uint32(status) == hidpStatusSuccess &&
+	legacy := probed && uint32(status) == hidpStatusSuccess && p.OutputID != 0 && p.InputID != 0 &&
 		declares(preparsed, hidpOutput, caps.NumberOutputValueCaps, p.OutputID) &&
 		declares(preparsed, hidpInput, caps.NumberInputValueCaps, p.InputID)
+	compact := probed && uint32(status) == hidpStatusSuccess && p.CompactOutputID != 0 && p.CompactInputID != 0 &&
+		declares(preparsed, hidpOutput, caps.NumberOutputValueCaps, p.CompactOutputID) &&
+		declares(preparsed, hidpInput, caps.NumberInputValueCaps, p.CompactInputID)
+	control := compact || legacy
 	procHidDFreePreparsedData.Call(preparsed)
 	if uint32(status) != hidpStatusSuccess {
 		return nil, platformError("cannot read HID report capabilities")
@@ -142,14 +146,15 @@ func inspectHID(device windows.Handle, name string) (*HID, error) {
 		return nil, platformError("RØDE USB control interface has no readable serial")
 	}
 	return &HID{
-		Path:    name,
-		Serial:  windows.UTF16ToString(serial),
-		PID:     a.ProductID,
-		Release: a.VersionNumber,
-		Usage:   caps.UsagePage,
-		Input:   int(caps.InputReportByteLength),
-		Output:  int(caps.OutputReportByteLength),
-		Control: control,
+		Path:           name,
+		Serial:         windows.UTF16ToString(serial),
+		PID:            a.ProductID,
+		Release:        a.VersionNumber,
+		Usage:          caps.UsagePage,
+		Input:          int(caps.InputReportByteLength),
+		Output:         int(caps.OutputReportByteLength),
+		Control:        control,
+		CompactControl: compact,
 	}, nil
 }
 

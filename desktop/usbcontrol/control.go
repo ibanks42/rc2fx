@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"math"
 	"runtime"
 	"strings"
 	"time"
@@ -21,13 +22,16 @@ import (
 )
 
 // RegisterControlProbe registers RC2FX's USB control report probe with
-// rodecaster/platform so HID.Control reports whether RC2FX's USB layout is
-// live on a mixer. Call before scanning HID devices when HID.Control is read.
+// rodecaster/platform so HID.Control and HID.CompactControl report whether
+// RC2FX's USB layout is live on a mixer. Call before scanning HID devices when
+// HID.Control is read.
 func RegisterControlProbe() {
 	platform.SetControlProbe(platform.ControlProbe{
-		Descriptor: usbproto.DeclaresControl,
-		OutputID:   usbproto.OutputID,
-		InputID:    usbproto.InputID,
+		Descriptor:      usbproto.DetectControl,
+		OutputID:        usbproto.OutputID,
+		InputID:         usbproto.InputID,
+		CompactOutputID: usbproto.CompactOutputID,
+		CompactInputID:  usbproto.CompactInputID,
 	})
 }
 
@@ -57,9 +61,13 @@ const (
 	// eventsPath: the event poll runs twenty times a second and is never a
 	// whole settings file.
 	eventsPath = "api/v1/events"
-
-	timedOut = "timed out"
-	notReady = "reply not ready"
+	// padShortWrites: Windows' HID WriteFile takes buffers sized to the
+	// collection's longest output report (256 bytes); hidclass.sys looks up
+	// report 64's declared 62-byte size and sends a single 62-byte packet on
+	// the wire. Linux and macOS take the 62-byte report directly.
+	padShortWrites = runtime.GOOS == "windows"
+	timedOut       = "timed out"
+	notReady       = "reply not ready"
 )
 
 // FailureKind says whether a failed request reached the mixer.
@@ -98,7 +106,20 @@ type Client struct {
 	// window is the request fragments sent per acknowledgement, and reply
 	// reports per fetch: 1 with a protocol 3 mixer, which acknowledges every
 	// report.
-	window      int
+	window int
+	// payload is the request bytes per fragment and inPayload the reply bytes
+	// per input report: (Payload, Payload) on legacy reports 5/6, or
+	// (CompactOutPayload, CompactInPayload) on compact reports 64/65.
+	payload   int
+	inPayload int
+	// compact is true when talking protocol 5 on reports 64/65 (20-byte header,
+	// 62-byte single-packet host writes, zstd compression).
+	compact bool
+	// shortWorks is set once a compact report 64 write succeeds; fullOnly once
+	// the host API refuses the first report 64 write, so reconnects fall back
+	// to legacy reports 5/6.
+	shortWorks  bool
+	fullOnly    bool
 	reportWait  time.Duration
 	executeWait time.Duration
 	// resume continues a previous process's session if connect finds the same
@@ -108,13 +129,17 @@ type Client struct {
 
 // Open opens the one connected mixer's RC2FX control.
 func Open() (*Client, error) {
-	var nonce [8]byte
+	// Keep the random nonce within uint32 so the same session ID works for
+	// both compact reports (32-bit session) and legacy reports (64-bit).
+	var nonce [4]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
 	c := &Client{
-		nonce:       max(binary.LittleEndian.Uint64(nonce[:]), 1),
+		nonce:       uint64(max(binary.LittleEndian.Uint32(nonce[:]), 1)),
 		window:      1,
+		payload:     usbproto.Payload,
+		inPayload:   usbproto.Payload,
 		reportWait:  reportWait,
 		executeWait: executeWait,
 		resume:      takeResume(),
@@ -127,6 +152,9 @@ func Open() (*Client, error) {
 
 // Serial is the connected mixer's USB serial.
 func (c *Client) Serial() string { return c.serial }
+
+// IsCompact reports whether this session negotiated compact protocol 5 (reports 64/65).
+func (c *Client) IsCompact() bool { return c.compact }
 
 // IsOpen is whether the handle is open.
 func (c *Client) IsOpen() bool { return c.reports != nil }
@@ -171,7 +199,7 @@ func (c *Client) connect(expected *string) error {
 	}
 	if r := c.resume; r != nil {
 		c.resume = nil
-		if r.serial == hid.Serial {
+		if r.serial == hid.Serial && (!hid.CompactControl || r.nonce <= math.MaxUint32) {
 			c.nonce, c.sequence = r.nonce, r.sequence
 		}
 	}
@@ -186,16 +214,39 @@ func (c *Client) connect(expected *string) error {
 	} else {
 		c.model = nil
 	}
-	if err := c.negotiate(); err != nil {
+	if err := c.negotiate(hid.CompactControl); err != nil {
 		return err
 	}
 	c.remember()
 	return nil
 }
 
-// negotiate tries protocol 4 first; a mixer that only speaks 3 refuses the
-// marked hello without touching its session, and gets the plain one.
-func (c *Client) negotiate() error {
+// negotiate speaks protocol 5 on compact reports 64/65 when declared by the
+// mixer's HID descriptor, falling back to legacy reports 5/6 (protocol 4,
+// then 3) for 0.2.4 mixers or hosts that refuse report 64 writes.
+func (c *Client) negotiate(hasCompact bool) error {
+	c.compact = false
+	c.payload, c.inPayload = usbproto.Payload, usbproto.Payload
+	if hasCompact && !c.fullOnly {
+		c.compact = true
+		c.payload, c.inPayload = usbproto.CompactOutPayload, usbproto.CompactInPayload
+		data, err := c.hello([]byte(usbproto.Hello5))
+		switch {
+		case err == nil:
+			w, found := usbproto.Hello5Window(data)
+			if !found {
+				c.Close()
+				return textError("RC2FX's USB protocol version does not match this app")
+			}
+			c.window = min(w, usbproto.MaxWindow)
+			return nil
+		case c.fullOnly, err.Error() == "Invalid USB hello":
+			c.compact = false
+			c.payload, c.inPayload = usbproto.Payload, usbproto.Payload
+		default:
+			return c.refused(err)
+		}
+	}
 	window, ok := 0, false
 	data, err := c.hello([]byte(usbproto.Hello4))
 	switch {
@@ -223,17 +274,38 @@ func (c *Client) negotiate() error {
 }
 
 // hello says hello with data; it returns the mixer's acknowledgement text.
+// If the first attempt times out reading a reply (for instance after a USB
+// write timeout leaves host and device out of sync on DATA0/DATA1 toggle so
+// the first packet is ACK-discarded to resync), retry the idempotent hello once.
 func (c *Client) hello(data []byte) ([]byte, error) {
 	frame := usbproto.Frame{Kind: usbproto.KindHello, Session: c.nonce, Data: data}
-	reply, err := c.exchange(&frame, time.Now().Add(c.reportWait), c.reportWait)
+	firstWait := min(c.reportWait, 500*time.Millisecond)
+	reply, err := c.exchange(&frame, time.Now().Add(firstWait), firstWait)
+	if err != nil && err.Error() == timedOut {
+		reply, err = c.exchange(&frame, time.Now().Add(c.reportWait), c.reportWait)
+	}
 	if err != nil {
 		return nil, err
 	}
-	ack, ok := usbproto.DecodeFrame(reply[:], usbproto.InputID)
+	ack, ok := c.decodeInput(reply[:])
 	if !ok || ack.Kind != usbproto.KindAck {
 		return nil, textError("Invalid USB hello reply")
 	}
 	return bytes.Clone(ack.Data), nil
+}
+
+func (c *Client) decodeInput(bytes []byte) (usbproto.Frame, bool) {
+	if c.compact {
+		return usbproto.DecodeCompactFrame(bytes, usbproto.CompactInputID)
+	}
+	return usbproto.DecodeFrame(bytes, usbproto.InputID)
+}
+
+func (c *Client) markedInput(bytes []byte) bool {
+	if c.compact {
+		return usbproto.MarkedCompact(bytes, usbproto.CompactInputID)
+	}
+	return usbproto.Marked(bytes, usbproto.InputID)
 }
 
 func (c *Client) refused(err error) error {
@@ -250,7 +322,12 @@ func (c *Client) Request(request *Request) (*Reply, error) {
 	if err != nil {
 		return nil, &Failure{NotSent, err.Error()}
 	}
-	packed, err := usbproto.Pack(json, usbproto.MaxRequest)
+	var packed []byte
+	if c.compact {
+		packed, err = usbproto.PackZstd(json, usbproto.MaxRequest)
+	} else {
+		packed, err = usbproto.Pack(json, usbproto.MaxRequest)
+	}
 	if err != nil {
 		return nil, &Failure{NotSent, err.Error()}
 	}
@@ -280,10 +357,10 @@ func (c *Client) Request(request *Request) (*Reply, error) {
 
 func (c *Client) send(data []byte) error {
 	end := time.Now().Add(deadline)
-	count := (len(data) + usbproto.Payload - 1) / usbproto.Payload
+	count := (len(data) + c.payload - 1) / c.payload
 	for index := range count {
-		offset := index * usbproto.Payload
-		chunk := data[offset:min(offset+usbproto.Payload, len(data))]
+		offset := index * c.payload
+		chunk := data[offset:min(offset+c.payload, len(data))]
 		last := index+1 == count
 		frame := usbproto.Frame{
 			Kind:    usbproto.KindRequest,
@@ -293,7 +370,7 @@ func (c *Client) send(data []byte) error {
 			Total:   len(data),
 			Data:    chunk,
 		}
-		// Protocol 4 acknowledges only the fragment that ends a window (USB
+		// Protocol 4/5 acknowledges only the fragment that ends a window (USB
 		// holds the next while the mixer is busy); the rest are only written.
 		if !last && (index+1)%c.window != 0 {
 			if err := c.write(&frame, earliest(end, time.Now().Add(c.reportWait))); err != nil {
@@ -314,7 +391,7 @@ func (c *Client) send(data []byte) error {
 			}
 			return err
 		}
-		ack, ok := usbproto.DecodeFrame(reply[:], usbproto.InputID)
+		ack, ok := c.decodeInput(reply[:])
 		if !ok {
 			return textError("Invalid USB acknowledgement")
 		}
@@ -333,7 +410,7 @@ func earliest(a, b time.Time) time.Time {
 }
 
 // fetch fetches the reply. Fetching is idempotent, so a lost report is
-// asked for again rather than ending the request. A protocol 4 mixer answers
+// asked for again rather than ending the request. A protocol 4/5 mixer answers
 // one fetch with several consecutive reports.
 func (c *Client) fetch(limit int) (*Reply, error) {
 	end := time.Now().Add(deadline)
@@ -379,7 +456,7 @@ func (c *Client) fetch(limit int) (*Reply, error) {
 				}
 				return nil, err
 			}
-			reply, ok := usbproto.DecodeFrame(report[:], usbproto.InputID)
+			reply, ok := c.decodeInput(report[:])
 			if !ok {
 				return nil, textError("Invalid USB reply")
 			}
@@ -432,12 +509,32 @@ func (c *Client) write(frame *usbproto.Frame, until time.Time) error {
 	if c.reports == nil {
 		return textError("USB is not connected")
 	}
-	encoded := frame.Encode(usbproto.OutputID)
-	n, err := c.reports.Write(encoded[:], remaining)
+	var report []byte
+	if c.compact {
+		short := frame.EncodeCompactOut()
+		if padShortWrites {
+			var padded [usbproto.ReportSize]byte
+			copy(padded[:], short[:])
+			report = padded[:]
+		} else {
+			report = short[:]
+		}
+	} else {
+		full := frame.Encode(usbproto.OutputID)
+		report = full[:]
+	}
+	n, err := c.reports.Write(report, remaining)
+	if c.compact {
+		if err == nil {
+			c.shortWorks = true
+		} else if !c.shortWorks {
+			c.fullOnly = true
+		}
+	}
 	if err != nil {
 		return err
 	}
-	if n < len(encoded) {
+	if n < len(report) {
 		return textError("Short USB write; not replayed")
 	}
 	return nil
@@ -466,10 +563,10 @@ func (c *Client) read(frame *usbproto.Frame, until time.Time) ([usbproto.ReportS
 		}
 		got := report[:min(n, usbproto.ReportSize)]
 		// RØDE's reports and other sessions' may arrive on the same handle.
-		if !usbproto.Marked(got, usbproto.InputID) {
+		if !c.markedInput(got) {
 			continue
 		}
-		reply, ok := usbproto.DecodeFrame(got, usbproto.InputID)
+		reply, ok := c.decodeInput(got)
 		if !ok {
 			return none, textError("Malformed USB reply")
 		}

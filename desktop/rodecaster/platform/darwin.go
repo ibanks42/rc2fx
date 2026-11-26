@@ -312,15 +312,17 @@ func enumerate() ([]HID, error) {
 	for i := range n {
 		h := &out[i]
 		descriptor := C.GoBytes(unsafe.Pointer(&h.descriptor[0]), C.int(h.descriptor_len))
+		control, compact := declaresControl(descriptor)
 		items = append(items, HID{
-			Path:    strconv.FormatUint(uint64(h.id), 10),
-			Serial:  C.GoString(&h.serial[0]),
-			PID:     uint16(h.pid),
-			Usage:   0xff00,
-			Input:   4096,
-			Output:  64,
-			Control: declaresControl(descriptor),
-			Release: uint16(h.release),
+			Path:           strconv.FormatUint(uint64(h.id), 10),
+			Serial:         C.GoString(&h.serial[0]),
+			PID:            uint16(h.pid),
+			Usage:          0xff00,
+			Input:          4096,
+			Output:         64,
+			Control:        control,
+			CompactControl: compact,
+			Release:        uint16(h.release),
 		})
 	}
 	return items, nil

@@ -4,8 +4,10 @@ use crate::{
     api::{Api, Options},
     coordinator::Handle,
 };
-use rc2fx_usb::{Assembly, Frame, INPUT_ID, INPUT_PAYLOAD, Kind, MAX_REQUEST, REPORT_SIZE};
-use rc2fx_usb::{INPUT_REPORT_SIZE, MAX_REPLY, OUTPUT_ID};
+use rc2fx_usb::{
+    Assembly, COMPACT_IN_PAYLOAD, COMPACT_OUT_PAYLOAD, COMPACT_OUTPUT_ID, Frame, INPUT_ID,
+    INPUT_PAYLOAD, INPUT_REPORT_SIZE, Kind, MAX_REPLY, MAX_REQUEST, OUTPUT_ID, REPORT_SIZE,
+};
 use std::time::{Duration, Instant};
 use std::{
     io,
@@ -35,6 +37,9 @@ struct Session {
     /// window boundary and fetches several reply reports at once. Empty data
     /// in a hello keeps protocol 3, exactly as before.
     v4: bool,
+    /// Protocol 5 on reports 64/65: compact 20-byte header, 62-byte host writes,
+    /// 256-byte replies on report 65, and zstd payload compression.
+    compact: bool,
     /// The window the server sized for this link when it started.
     window: usize,
 }
@@ -58,37 +63,54 @@ enum Action {
 
 fn response(
     frame: &Frame<'_>,
+    compact: bool,
     kind: Kind,
     offset: usize,
     total: usize,
     data: &[u8],
 ) -> [u8; REPORT_SIZE] {
-    Frame {
+    let reply = Frame {
         kind,
         session: frame.session,
         request: frame.request,
         offset,
         total,
         data,
+    };
+    if compact {
+        reply.encode_compact_in()
+    } else {
+        reply.encode(INPUT_ID)
     }
-    .encode(INPUT_ID)
 }
 impl Session {
-    fn accept(&mut self, f: &Frame<'_>, now: Instant) -> Action {
+    fn accept(&mut self, f: &Frame<'_>, compact: bool, now: Instant) -> Action {
+        let max_err = if compact {
+            COMPACT_IN_PAYLOAD
+        } else {
+            INPUT_PAYLOAD
+        };
         let error = |text: &'static str| {
             Action::Send(vec![response(
                 f,
+                compact,
                 Kind::Error,
                 0,
                 0,
-                &text.as_bytes()[..text.len().min(INPUT_PAYLOAD)],
+                &text.as_bytes()[..text.len().min(max_err)],
             )])
         };
         if f.session == 0 {
             return error("Invalid USB session");
         }
         if f.kind == Kind::Hello {
-            let v4 = if f.data.is_empty() {
+            let v4 = if compact {
+                if f.data == rc2fx_usb::HELLO_5 {
+                    true
+                } else {
+                    return error("Invalid USB hello");
+                }
+            } else if f.data.is_empty() {
                 false
             } else if f.data == rc2fx_usb::HELLO_4 {
                 true
@@ -105,7 +127,9 @@ impl Session {
             {
                 return error("USB is in use by another RC2FX client");
             }
-            let ack = if v4 {
+            let ack = if compact {
+                format!("RC2FX USB 5 {}", self.window)
+            } else if v4 {
                 format!("RC2FX USB 4 {}", self.window)
             } else {
                 // No window: protocol 3's acknowledgement is exactly HELLO_3.
@@ -117,17 +141,29 @@ impl Session {
                     nonce: f.session,
                     seen: Some(now),
                     v4,
+                    compact,
                     window,
                     ..Self::default()
                 };
-                return Action::Reset(Box::new(response(f, Kind::Ack, 0, 0, ack.as_bytes())));
+                return Action::Reset(Box::new(response(
+                    f,
+                    compact,
+                    Kind::Ack,
+                    0,
+                    0,
+                    ack.as_bytes(),
+                )));
             }
             self.v4 = v4;
+            self.compact = compact;
             self.seen = Some(now);
-            return Action::Send(vec![response(f, Kind::Ack, 0, 0, ack.as_bytes())]);
+            return Action::Send(vec![response(f, compact, Kind::Ack, 0, 0, ack.as_bytes())]);
         }
         if f.session != self.nonce {
             return error("USB session expired; reconnect");
+        }
+        if compact != self.compact {
+            return error("Invalid USB control packet");
         }
         self.seen = Some(now);
         match f.kind {
@@ -151,16 +187,20 @@ impl Session {
                         Action::Execute(request)
                     }
                     Ok(None) => {
-                        // Protocol 4 lets the host keep one window of fragments
+                        // Protocol 4/5 lets the host keep one window of fragments
                         // in flight. Only the fragment that ends a window is
                         // acknowledged; one acknowledgement then covers all of
                         // them, and errors are still sent as they happen.
                         let end = f.offset + f.data.len();
-                        if self.v4 && !(end / rc2fx_usb::PAYLOAD).is_multiple_of(self.window.max(1))
-                        {
+                        let payload = if self.compact {
+                            COMPACT_OUT_PAYLOAD
+                        } else {
+                            rc2fx_usb::PAYLOAD
+                        };
+                        if self.v4 && !(end / payload).is_multiple_of(self.window.max(1)) {
                             Action::Send(Vec::new())
                         } else {
-                            Action::Send(vec![response(f, Kind::Ack, end, f.total, &[])])
+                            Action::Send(vec![response(f, compact, Kind::Ack, end, f.total, &[])])
                         }
                     }
                     Err(message) => {
@@ -175,10 +215,19 @@ impl Session {
                     && !reply.is_empty()
                     && f.data.is_empty()
                     && f.offset < reply.len()
-                    && f.offset.is_multiple_of(INPUT_PAYLOAD) =>
+                    && f.offset.is_multiple_of(if compact {
+                        COMPACT_IN_PAYLOAD
+                    } else {
+                        INPUT_PAYLOAD
+                    }) =>
             {
+                let in_payload = if compact {
+                    COMPACT_IN_PAYLOAD
+                } else {
+                    INPUT_PAYLOAD
+                };
                 // Protocol 3 asks for one report and requires `total` to be
-                // zero; protocol 4 names how many reports it can take, and
+                // zero; protocol 4/5 names how many reports it can take, and
                 // fetches them in order until the reply ends.
                 let count = if self.v4 {
                     if f.total > self.window.max(1) {
@@ -192,13 +241,14 @@ impl Session {
                 };
                 let mut replies = Vec::with_capacity(count);
                 for index in 0..count {
-                    let start = f.offset + index * INPUT_PAYLOAD;
+                    let start = f.offset + index * in_payload;
                     if start >= reply.len() {
                         break;
                     }
-                    let end = (start + INPUT_PAYLOAD).min(reply.len());
+                    let end = (start + in_payload).min(reply.len());
                     replies.push(response(
                         f,
+                        compact,
                         Kind::Reply,
                         start,
                         reply.len(),
@@ -300,13 +350,18 @@ impl Server {
     }
 
     /// Handles one report and returns the reports to answer with, in order.
-    /// Not an RC2FX frame and a protocol 4 fragment inside a window answer
+    /// Not an RC2FX frame and a protocol 4/5 fragment inside a window answer
     /// with nothing.
     pub(crate) async fn handle(&mut self, bytes: &[u8]) -> io::Result<Vec<[u8; REPORT_SIZE]>> {
-        let Some(frame) = Frame::decode(bytes, OUTPUT_ID) else {
+        let (frame, compact) = if let Some(frame) = Frame::decode_compact(bytes, COMPACT_OUTPUT_ID)
+        {
+            (frame, true)
+        } else if let Some(frame) = Frame::decode(bytes, OUTPUT_ID) {
+            (frame, false)
+        } else {
             return Ok(Vec::new());
         };
-        let replies = match self.session.accept(&frame, Instant::now()) {
+        let replies = match self.session.accept(&frame, compact, Instant::now()) {
             Action::Send(replies) => replies,
             Action::Reset(reply) => {
                 self.api.reset();
@@ -336,18 +391,31 @@ impl Server {
                 // A long request still counts as activity: another client
                 // must not take the session over before its reply is fetched.
                 self.session.seen = Some(Instant::now());
+                let pack_reply = |data: &[u8]| {
+                    if self.session.compact {
+                        rc2fx_usb::pack_zstd(data, MAX_REPLY)
+                    } else {
+                        rc2fx_usb::pack(data, MAX_REPLY)
+                    }
+                };
                 let json = serde_json::to_vec(&reply).map_err(io::Error::other)?;
-                let packed = match rc2fx_usb::pack(&json, MAX_REPLY) {
+                let packed = match pack_reply(&json) {
                     Ok(bytes) => bytes,
-                    Err(_) => rc2fx_usb::pack(
+                    Err(_) => pack_reply(
                         &serde_json::to_vec(&fail(413, "USB reply too large"))
                             .map_err(io::Error::other)?,
-                        MAX_REPLY,
                     )
                     .map_err(io::Error::other)?,
                 };
                 self.session.exchange = Exchange::Answered(packed);
-                vec![response(&frame, Kind::Ack, frame.total, frame.total, &[])]
+                vec![response(
+                    &frame,
+                    compact,
+                    Kind::Ack,
+                    frame.total,
+                    frame.total,
+                    &[],
+                )]
             }
         };
         // Only the session's owner keeps its subscription alive, and the time
@@ -457,6 +525,7 @@ pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc2fx_usb::COMPACT_INPUT_ID;
 
     static FILL: [u8; rc2fx_usb::PAYLOAD] = [0x5a; rc2fx_usb::PAYLOAD];
 
@@ -473,15 +542,15 @@ mod tests {
             data: &[],
         };
         assert!(
-            matches!(s.accept(&f, now), Action::Reset(b) if Frame::decode(&b[..],INPUT_ID).unwrap().kind==Kind::Ack)
+            matches!(s.accept(&f, false, now), Action::Reset(b) if Frame::decode(&b[..],INPUT_ID).unwrap().kind==Kind::Ack)
         );
         f.kind = Kind::Request;
         f.request = 1;
         f.total = 1;
         f.data = b"x";
-        assert!(matches!(s.accept(&f, now), Action::Execute(b) if b == b"x"));
+        assert!(matches!(s.accept(&f, false, now), Action::Execute(b) if b == b"x"));
         assert!(
-            matches!(s.accept(&f,now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
+            matches!(s.accept(&f, false, now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
         );
         f.kind = Kind::Hello;
         f.request = 0;
@@ -489,10 +558,10 @@ mod tests {
         f.data = &[];
         f.session = 5;
         assert!(
-            matches!(s.accept(&f,now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
+            matches!(s.accept(&f, false, now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
         );
         assert!(matches!(
-            s.accept(&f, now + Duration::from_secs(6)),
+            s.accept(&f, false, now + Duration::from_secs(6)),
             Action::Reset(_)
         ));
     }
@@ -516,7 +585,7 @@ mod tests {
             ..Session::default()
         };
         // Empty data is protocol 3, byte for byte as before.
-        let Action::Reset(reply) = session.accept(&hello(1, b""), now) else {
+        let Action::Reset(reply) = session.accept(&hello(1, b""), false, now) else {
             panic!("a new hello resets")
         };
         assert_eq!(
@@ -526,7 +595,8 @@ mod tests {
         assert!(!session.v4);
         // A protocol 4 client names the version and the mixer answers with the
         // window it sized for this link.
-        let Action::Send(replies) = session.accept(&hello(1, rc2fx_usb::HELLO_4), now) else {
+        let Action::Send(replies) = session.accept(&hello(1, rc2fx_usb::HELLO_4), false, now)
+        else {
             panic!("a hello on the same session is acknowledged")
         };
         assert_eq!(replies.len(), 1);
@@ -535,9 +605,15 @@ mod tests {
             b"RC2FX USB 4 12"
         );
         assert!(session.v4);
-        // Anything else is not a hello, including a version with a window.
-        for junk in [&b"RC2FX USB 5"[..], b"RC2FX USB 4 12", b"junk"] {
-            let Action::Send(replies) = session.accept(&hello(1, junk), now) else {
+        // Anything else is not a hello on legacy report 5, including HELLO_5.
+        for junk in [
+            &b"RC2FX USB 5"[..],
+            b"RC2FX USB 6",
+            b"RC2FX USB 4 12",
+            b"RC2FX USB 5 12",
+            b"junk",
+        ] {
+            let Action::Send(replies) = session.accept(&hello(1, junk), false, now) else {
                 panic!("hello errors are immediate")
             };
             let frame = Frame::decode(&replies[0], INPUT_ID).unwrap();
@@ -554,7 +630,7 @@ mod tests {
             ..Session::default()
         };
         assert!(matches!(
-            session.accept(&hello(1, rc2fx_usb::HELLO_4), now),
+            session.accept(&hello(1, rc2fx_usb::HELLO_4), false, now),
             Action::Reset(_)
         ));
         let total = 3 * rc2fx_usb::PAYLOAD;
@@ -571,9 +647,11 @@ mod tests {
             }
         };
         // The first fragment ends inside a window: no reply.
-        assert!(matches!(session.accept(&fragment(0), now), Action::Send(r) if r.is_empty()));
+        assert!(
+            matches!(session.accept(&fragment(0), false, now), Action::Send(r) if r.is_empty())
+        );
         // The second ends the window: one acknowledgement.
-        let Action::Send(replies) = session.accept(&fragment(1), now) else {
+        let Action::Send(replies) = session.accept(&fragment(1), false, now) else {
             panic!("a boundary is acknowledged")
         };
         assert_eq!(replies.len(), 1);
@@ -583,7 +661,7 @@ mod tests {
         );
         // The final fragment executes whether or not it ends a window.
         assert!(matches!(
-            session.accept(&fragment(2), now),
+            session.accept(&fragment(2), false, now),
             Action::Execute(bytes) if bytes.len() == total
         ));
         // Protocol 3 acknowledges every non-final fragment.
@@ -592,15 +670,92 @@ mod tests {
             ..Session::default()
         };
         assert!(matches!(
-            session.accept(&hello(1, b""), now),
+            session.accept(&hello(1, b""), false, now),
             Action::Reset(_)
         ));
         for index in 0..2 {
-            let Action::Send(replies) = session.accept(&fragment_with(index, total), now) else {
+            let Action::Send(replies) = session.accept(&fragment_with(index, total), false, now)
+            else {
                 panic!("protocol 3 acknowledges")
             };
             assert_eq!(replies.len(), 1);
         }
+    }
+
+    #[test]
+    fn protocol_five_compact_uses_reports_64_and_65_and_compact_windows() {
+        let now = Instant::now();
+        let mut session = Session {
+            window: 2,
+            ..Session::default()
+        };
+        let Action::Reset(reply) = session.accept(&hello(1, rc2fx_usb::HELLO_5), true, now) else {
+            panic!("a new hello resets")
+        };
+        assert_eq!(
+            Frame::decode_compact(&reply[..], COMPACT_INPUT_ID)
+                .unwrap()
+                .data,
+            b"RC2FX USB 5 2"
+        );
+        assert!(session.v4 && session.compact);
+        let short = COMPACT_OUT_PAYLOAD;
+        let total = 3 * short;
+        let fragment = |index: usize| Frame {
+            kind: Kind::Request,
+            session: 1,
+            request: 7,
+            offset: index * short,
+            total,
+            data: &FILL[..short],
+        };
+        assert!(matches!(session.accept(&fragment(0), true, now), Action::Send(r) if r.is_empty()));
+        let Action::Send(replies) = session.accept(&fragment(1), true, now) else {
+            panic!("a boundary is acknowledged")
+        };
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            Frame::decode_compact(&replies[0], COMPACT_INPUT_ID)
+                .unwrap()
+                .offset,
+            2 * short
+        );
+        // Mixing legacy report 5 into a compact session is refused.
+        let Action::Send(mixed) = session.accept(&fragment(2), false, now) else {
+            panic!("mixed report refused")
+        };
+        assert_eq!(
+            Frame::decode(&mixed[0], INPUT_ID).unwrap().kind,
+            Kind::Error
+        );
+        assert!(matches!(
+            session.accept(&fragment(2), true, now),
+            Action::Execute(bytes) if bytes.len() == total
+        ));
+        // Compact fetch uses COMPACT_IN_PAYLOAD (236) chunks on report 65.
+        session.exchange = Exchange::Answered(vec![0x33; COMPACT_IN_PAYLOAD + 7]);
+        let fetch = Frame {
+            kind: Kind::Fetch,
+            session: 1,
+            request: 7,
+            offset: 0,
+            total: 2,
+            data: &[],
+        };
+        let Action::Send(replies) = session.accept(&fetch, true, now) else {
+            panic!("compact fetch answers")
+        };
+        assert_eq!(replies.len(), 2);
+        let f0 = Frame::decode_compact(&replies[0], COMPACT_INPUT_ID).unwrap();
+        let f1 = Frame::decode_compact(&replies[1], COMPACT_INPUT_ID).unwrap();
+        assert_eq!((f0.offset, f0.data.len()), (0, COMPACT_IN_PAYLOAD));
+        assert_eq!((f1.offset, f1.data.len()), (COMPACT_IN_PAYLOAD, 7));
+        // A legacy protocol 4 hello on report 5 switches back to legacy framing.
+        assert!(matches!(
+            session.accept(&hello(1, rc2fx_usb::HELLO_4), false, now),
+            Action::Send(_)
+        ));
+        assert!(session.v4 && !session.compact);
     }
 
     fn fragment_with(index: usize, total: usize) -> Frame<'static> {
@@ -624,7 +779,7 @@ mod tests {
         let now = Instant::now();
         let mut session = Session::default();
         assert!(matches!(
-            session.accept(&hello(1, b""), now),
+            session.accept(&hello(1, b""), false, now),
             Action::Reset(_)
         ));
         let kind = |action: Action| match action {
@@ -650,34 +805,55 @@ mod tests {
             data: &[],
         };
         // Nothing is received yet: a continuation and a fetch are refused.
-        assert_eq!(kind(session.accept(&fragment(1, 1, 2), now)), Kind::Error);
-        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
+        assert_eq!(
+            kind(session.accept(&fragment(1, 1, 2), false, now)),
+            Kind::Error
+        );
+        assert_eq!(kind(session.accept(&fetch(1), false, now)), Kind::Error);
         assert!(matches!(session.exchange, Exchange::Idle));
         // The first fragment starts receiving and the second completes it.
-        assert_eq!(kind(session.accept(&fragment(1, 0, 2), now)), Kind::Ack);
+        assert_eq!(
+            kind(session.accept(&fragment(1, 0, 2), false, now)),
+            Kind::Ack
+        );
         assert!(matches!(session.exchange, Exchange::Receiving(_)));
         assert!(matches!(
-            session.accept(&fragment(1, 1, 2), now),
+            session.accept(&fragment(1, 1, 2), false, now),
             Action::Execute(bytes) if bytes.len() == 2
         ));
         // While it runs there is no reply to fetch and nothing to continue.
         assert!(matches!(session.exchange, Exchange::Idle));
-        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
-        assert_eq!(kind(session.accept(&fragment(1, 1, 2), now)), Kind::Error);
+        assert_eq!(kind(session.accept(&fetch(1), false, now)), Kind::Error);
+        assert_eq!(
+            kind(session.accept(&fragment(1, 1, 2), false, now)),
+            Kind::Error
+        );
         // Answered, its reply can be fetched, but only by its own ID.
         session.exchange = Exchange::Answered(vec![0x33; 3]);
-        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Reply);
-        assert_eq!(kind(session.accept(&fetch(2), now)), Kind::Error);
+        assert_eq!(kind(session.accept(&fetch(1), false, now)), Kind::Reply);
+        assert_eq!(kind(session.accept(&fetch(2), false, now)), Kind::Error);
         // A replay of its first fragment is refused and keeps the reply.
-        assert_eq!(kind(session.accept(&fragment(1, 0, 2), now)), Kind::Error);
-        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Reply);
+        assert_eq!(
+            kind(session.accept(&fragment(1, 0, 2), false, now)),
+            Kind::Error
+        );
+        assert_eq!(kind(session.accept(&fetch(1), false, now)), Kind::Reply);
         // The next request drops the reply.
-        assert_eq!(kind(session.accept(&fragment(2, 0, 2), now)), Kind::Ack);
-        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
+        assert_eq!(
+            kind(session.accept(&fragment(2, 0, 2), false, now)),
+            Kind::Ack
+        );
+        assert_eq!(kind(session.accept(&fetch(1), false, now)), Kind::Error);
         // A fragment that breaks the sequence ends the receipt for good.
-        assert_eq!(kind(session.accept(&fragment(2, 1, 3), now)), Kind::Error);
+        assert_eq!(
+            kind(session.accept(&fragment(2, 1, 3), false, now)),
+            Kind::Error
+        );
         assert!(matches!(session.exchange, Exchange::Idle));
-        assert_eq!(kind(session.accept(&fragment(2, 1, 2), now)), Kind::Error);
+        assert_eq!(
+            kind(session.accept(&fragment(2, 1, 2), false, now)),
+            Kind::Error
+        );
         assert_eq!(session.last, 2);
     }
 
@@ -689,7 +865,7 @@ mod tests {
             ..Session::default()
         };
         assert!(matches!(
-            session.accept(&hello(1, rc2fx_usb::HELLO_4), now),
+            session.accept(&hello(1, rc2fx_usb::HELLO_4), false, now),
             Action::Reset(_)
         ));
         session.last = 4;
@@ -702,7 +878,7 @@ mod tests {
             total,
             data: &[],
         };
-        let Action::Send(replies) = session.accept(&fetch(2, 0), now) else {
+        let Action::Send(replies) = session.accept(&fetch(2, 0), false, now) else {
             panic!("a fetch answers")
         };
         assert_eq!(replies.len(), 2);
@@ -715,17 +891,17 @@ mod tests {
         assert_eq!(frames[0].total, 2 * INPUT_PAYLOAD + 5);
         assert_eq!(frames[1].data.len(), INPUT_PAYLOAD);
         // The last report stops at the end of the reply.
-        let Action::Send(replies) = session.accept(&fetch(3, 2 * INPUT_PAYLOAD), now) else {
+        let Action::Send(replies) = session.accept(&fetch(3, 2 * INPUT_PAYLOAD), false, now) else {
             panic!("a fetch answers")
         };
         assert_eq!(replies.len(), 1);
         assert_eq!(Frame::decode(&replies[0], INPUT_ID).unwrap().data.len(), 5);
         // Zero means one in protocol 4, and more than the window is refused.
-        let Action::Send(replies) = session.accept(&fetch(0, 0), now) else {
+        let Action::Send(replies) = session.accept(&fetch(0, 0), false, now) else {
             panic!("a fetch answers")
         };
         assert_eq!(replies.len(), 1);
-        let Action::Send(replies) = session.accept(&fetch(4, 0), now) else {
+        let Action::Send(replies) = session.accept(&fetch(4, 0), false, now) else {
             panic!("an over-window fetch is an immediate error")
         };
         assert_eq!(
@@ -735,16 +911,16 @@ mod tests {
         // Protocol 3 still takes exactly one report and requires total 0.
         let mut session = Session::default();
         assert!(matches!(
-            session.accept(&hello(1, b""), now),
+            session.accept(&hello(1, b""), false, now),
             Action::Reset(_)
         ));
         session.last = 4;
         session.exchange = Exchange::Answered(vec![0x33; 2 * INPUT_PAYLOAD + 5]);
-        let Action::Send(replies) = session.accept(&fetch(0, 0), now) else {
+        let Action::Send(replies) = session.accept(&fetch(0, 0), false, now) else {
             panic!("a protocol 3 fetch answers")
         };
         assert_eq!(replies.len(), 1);
-        let Action::Send(replies) = session.accept(&fetch(1, 0), now) else {
+        let Action::Send(replies) = session.accept(&fetch(1, 0), false, now) else {
             panic!("a protocol 3 fetch refusal is immediate")
         };
         assert_eq!(

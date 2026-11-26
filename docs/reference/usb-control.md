@@ -6,14 +6,15 @@ This has been tested on Windows with a Pro II on 1.7.7: settings writes, telemet
 
 ## Sharing RØDE's HID collection
 
-USB 1 exposes a vendor HID interface. RØDE's 46-byte report descriptor defines a single top-level collection (usage page `ff00`, usage 1) with output reports 1 and 3 and input reports 2 and 4. RC2FX leaves all of those untouched and appends output report 5 and input report 6 to the same collection. Both new reports carry 255 payload bytes, keeping the collection's report size at 256 bytes and bringing the descriptor to 62 bytes:
+USB 1 exposes a vendor HID interface. RØDE's 46-byte report descriptor defines a single top-level collection (usage page `ff00`, usage 1) with output reports 1 and 3 and input reports 2 and 4. RC2FX leaves all of those untouched and appends legacy output report 5 (256 bytes) and input report 6 (256 bytes) as a transition bridge for 0.2.4 clients, plus compact output report 64 (`0x40`, 62 bytes, one USB packet) and input report 65 (`0x41`, 256 bytes) to the same collection, keeping the collection's maximum report size at 256 bytes and bringing the descriptor to 78 bytes:
 
 ```
 06 00 ff 09 01 a1 01 75 08 15 00 25 ff 09 02 85 01 95 3f 91 02 09 03 85 02 95 3f 81 02
-09 04 85 03 95 ff 91 02 09 05 85 04 95 ff 81 02  09 06 85 05 95 ff 91 02  09 07 85 06 95 ff 81 02  c0
+09 04 85 03 95 ff 91 02 09 05 85 04 95 ff 81 02  09 06 85 05 95 ff 91 02  09 07 85 06 95 ff 81 02
+09 40 85 40 95 3d 91 02  09 41 85 41 95 ff 81 02  c0
 ```
 
-Every reader on the collection sees report 6: RØDE's software filters by report ID and ignores it, while RC2FX only picks up its own marked reports. The desktop app recognizes a mixer as running RC2FX only when the collection advertises reports 5 and 6. On Windows, the app also bumps its HID input queue to 512 reports so heavy RØDE traffic can't evict RC2FX replies.
+Every reader on the collection sees reports 6 and 65: RØDE's software filters by report ID and ignores them, while RC2FX only picks up its own marked reports. The desktop app recognizes a mixer as running RC2FX when the collection advertises either reports 64/65 or legacy reports 5/6. On Windows, the app also bumps its HID input queue to 512 reports so heavy RØDE traffic can't evict RC2FX replies.
 
 ### Rejected alternatives
 
@@ -37,27 +38,40 @@ In 1.7.7, RØDE's HID loop runs a zero-timeout `pselect` on `/dev/hidg0`, drains
 
 ## Framing
 
-We support protocol versions 3 and 4. Each 256-byte report packs a seven-byte marker, a random session nonce, a request ID, an offset, a total size, and a payload length, leaving 224 bytes for payload data. Windows pads OUT reports to 257 bytes on this firmware; the extra byte is ignored. Both protocol versions share this exact frame layout; only the acknowledgement and fetch rules differ.
+We support protocol versions 3, 4, and 5:
 
-Payloads are JSON, zlib-compressed whenever compression actually shrinks them. Both ends enforce strict size limits and reject truncated streams, trailing bytes, or bad lengths.
+- **Legacy reports 5 (OUT) and 6 (IN), protocol 3/4:** 256-byte reports with a 32-byte header (report ID, 7-byte `\xffRC2FX\0` marker, version 3, kind, 64-bit random session nonce, 32-bit request ID, 32-bit offset, 32-bit total size, 16-bit payload length) and up to 224 bytes of payload. Payloads are JSON, zlib-compressed (`Z`) whenever compression shrinks them, otherwise raw (`J`).
+- **Compact reports 64 (`0x40`, 62 B OUT) and 65 (`0x41`, 256 B IN), protocol 5:** 20-byte header (report ID, 3-byte `\xffFX` marker, version/kind byte `(5 << 4) | kind`, 8-bit payload length, 32-bit session nonce, 32-bit request ID, 24-bit offset, 24-bit total size), carrying up to **42 bytes** of payload per host report (so bodyless `GET` requests such as `api/v1/events` fit in one 62-byte USB packet) and **236 bytes** per reply report. Payloads are JSON, zstd-compressed (`S`) whenever compression shrinks them, otherwise raw (`J`); `unpack` accepts `J`, `Z`, and `S`.
+
+Both ends enforce strict size limits and reject truncated streams, trailing bytes, concatenated frames, or bad lengths. The mixer's controller counts stale trailing bytes into reads (257 bytes for a 256-byte transfer and 66 bytes for a 62-byte transfer); the native hook strips those trailing bytes when accepting a report.
 
 `rc2fxd` dispatches each request directly to its [control API](api.md) in process. Events (`state`, `engine`, `meter`, `usb`) are polled one per request.
 
 ### Negotiation
 
-A client's Hello carries empty data for protocol 3 or `RC2FX USB 4` for protocol 4. The mixer replies with `RC2FX USB 3` or `RC2FX USB 4 <window>`, where `<window>` is how many reports the client can keep in flight. Anything else gets rejected with `Invalid USB hello`. An older mixer rejects a protocol 4 hello with that error, so the app falls back to an empty hello and speaks protocol 3.
+When the mixer's HID descriptor declares compact reports 64 and 65, the desktop app sends its `Hello` (`RC2FX USB 5`) directly on report 64 and reads `RC2FX USB 5 <window>` on report 65, so no 256-byte host report is ever transmitted. When only legacy reports 5 and 6 are declared (0.2.4 mixers), or if the host HID API refuses the first report 64 write, the client falls back to legacy reports 5/6 with `RC2FX USB 4` (or empty data for protocol 3).
+
+On Linux and macOS, the client writes 62-byte report 64 directly. On Windows, `WriteFile` requires a buffer sized to `OutputReportByteLength` (256 bytes because of RØDE's report 3 and legacy report 5), so the client zero-pads report 64 to 256 bytes in the `WriteFile` buffer; Windows' `hidclass.sys` reads report 64's declared 62-byte length from the descriptor and transmits a single 62-byte USB packet on the wire.
 
 The mixer advertises a window of 32. The app caps fetches at 16 reply reports at a time because macOS only queues around 30 input reports and Linux's hidraw queues 64 (shared with RØDE's traffic). Benchmarked on a Pro II (1.7.7) from Linux, uploads hit ~285 KB/s on protocol 4 versus ~21 KB/s on protocol 3, and small round trips drop from ~21 ms to ~6 ms, with no xruns introduced during transfers.
 
-### Protocol 4 pipelining
+### Protocol 4/5 pipelining
 
-- Non-final request fragments only get an acknowledgement at window boundaries: `((offset + length) / 224) % window == 0`. Intermediate fragments get no reply, and one ack covers the whole window. The final fragment still executes the request and sends an ack as usual.
-- A Fetch's `total` field carries a count `n` (protocol 3 required zero). Zero means one, and any `n` larger than the window is rejected. The mixer responds with up to `n` consecutive Reply reports until it hits the end of the cached reply.
+- Non-final request fragments only get an acknowledgment at window boundaries: `((offset + length) / 224) % window == 0` on protocol 4 and `/ 42` on protocol 5. Intermediate fragments get no reply, and one ack covers the whole window. The final fragment still executes the request and sends an ack as usual.
+- A Fetch's `total` field carries a count `n` (protocol 3 required zero). Zero means one, and any `n` larger than the window is rejected. The mixer responds with up to `n` consecutive Reply reports (224 bytes each on report 6, 236 bytes each on report 65) until it hits the end of the cached reply.
 - Errors go out immediately, and the client picks them up on its next wait. All existing size limits, request IDs, and reply-caching rules still apply.
+
+### Protocol 5 compact host reports
+
+Protocol 5 sends every host report (including `Hello`, `Request`, and `Fetch`) as a 62-byte single-packet report on report ID 64, and receives 256-byte replies on report ID 65.
+
+Single-packet reports avoid stalls and DMA overruns on the mixer's HID OUT endpoint, which uses a 63-byte max packet size (RØDE's stock gadget setting). Host reports that span several packets stall the endpoint for the host's full write timeout (5 s on Linux, error `connection timed out`) roughly once per few hundred packets and leave the mixer's DWC2 receive buffer misaligned by 59 bytes (`315/256`). Hardware measurements recorded 10 stalls in 1,047 full-size writes and 8 stalls in 2,339 two-packet writes, compared to 0 stalls in 5,373+ single-packet writes on Linux and Windows 11.
+
+Because the mixer's controller counts a few stale bytes into each read (66 bytes for a 62-byte transfer and 257 bytes for a 256-byte transfer), the native hook takes the first 62 bytes of a marked report 64 read of 62 to 69 bytes (with payload length at most 42 bytes) and forwards it directly to `rc2fxd`. Other read lengths, including a padded 256-byte report 64, are refused.
 
 ### Reliability
 
-- Protocol 3 is stop-and-wait; protocol 4 pipelines windows, waiting for each window's ack before sending the next.
+- Protocol 3 is stop-and-wait; protocols 4 and 5 pipeline windows, waiting for each window's acknowledgment before sending the next.
 - No automatic replay: if a request's outcome is ambiguous, we don't blindly resend it. Each request ID runs at most once per session. Because replies are cached, a dropped reply or lost final ack can be recovered safely by fetching the cached reply.
 - Timeouts: 3 s per report, 17 s for the final fragment (which executes the request), and 60 s for a full message. Very large diagnostics dumps can still hit that ceiling.
 - Single client at a time: another process has to wait 5 seconds (`CLIENT_IDLE` in `rc2fxd`) after the current client's last activity before taking over. The app preserves its session across reconnects, refuses a mixer with a different serial, and does a fresh read before sending any writes after reconnecting.
@@ -86,7 +100,7 @@ go -C desktop run ./cmd/usb-probe --extended # also inputs, presets, diagnostics
 
 Pass `--write-roundtrip` to reapply the current settings unchanged with revision checking (this bumps the revision and won't retry on conflict).
 
-Unit tests cover fragmentation, malformed sizes, reordering, bounded decompression, stale sessions, unrelated vendor reports, ambiguous writes, reconnection, protocol 4 negotiation, windowed acks, and multi-report fetches. The xtask tests (`tools/xtask/internal/mixer`) rebuild the staged descriptor and verify that RØDE's original items haven't changed.
+Unit tests cover fragmentation, malformed sizes, reordering, bounded decompression, stale sessions, unrelated vendor reports, ambiguous writes, reconnection, protocol 4 and 5 negotiation, short host reports, windowed acknowledgments, and multi-report fetches. The xtask tests (`tools/xtask/internal/mixer`) rebuild the staged descriptor and verify that RØDE's original items haven't changed.
 
 ## Known quirks
 
@@ -95,3 +109,4 @@ These come from RØDE's software and happen on stock firmware too:
 - RØDE's app can hang on "SYNCHRONIZING DEVICE" if it sits on the device list for a minute or more while RØDE's Windows service is running.
 - RØDE's Windows service opens the mixer's raw audio endpoint before it starts polling HID. If another app is holding the raw **Main Multitrack** endpoint, the service never starts polling and the virtual devices won't show up until that app lets go.
 - In Expanded USB mode, the kernel logs `set_ep_max_packet_size: Uh-Oh - audio will not fit`. USB control still works fine.
+- The mixer's HID OUT endpoint uses a 63-byte max packet size. Host output reports that span multiple packets stall the endpoint for the host's write timeout (5 s on Linux) roughly once per few hundred packets and leave the receive buffer misaligned, losing the next report. Protocol 5 avoids this by sending 62-byte single-packet host reports on report 64 (including Hello).

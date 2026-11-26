@@ -45,28 +45,59 @@ func TestHello4WindowContract(t *testing.T) {
 	}
 }
 
+func TestHello5WindowContract(t *testing.T) {
+	for _, c := range []struct {
+		data string
+		want int
+		ok   bool
+	}{
+		{"RC2FX USB 5 1", 1, true},
+		{"RC2FX USB 5 32", 32, true},
+		{"RC2FX USB 5 0", 0, false},
+		{"RC2FX USB 5 65", 0, false},
+		{"RC2FX USB 5", 0, false},
+		{"RC2FX USB 4 8", 0, false},
+	} {
+		got, ok := Hello5Window([]byte(c.data))
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("Hello5Window(%q) = %d, %v; want %d, %v", c.data, got, ok, c.want, c.ok)
+		}
+	}
+	if CompactOutPayload != 42 || CompactInPayload != 236 {
+		t.Errorf("CompactOutPayload = %d, CompactInPayload = %d; want 42, 236", CompactOutPayload, CompactInPayload)
+	}
+}
+
 func TestDescriptorControlDetection(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		hex     string
 		control bool
+		compact bool
 	}{
-		{"stock", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff8102c0", false},
-		{"staged", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff8102c0", true},
-		{"staged-without-output", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff810209060907850695ff8102c0", false},
-		{"staged-without-input", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907c0", false},
-		{"staged-truncated", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff", false},
-		{"ids-swapped", "0600ff0901a101850695ff9102850595ff8102c0", false},
-		{"push-pop-restores-report", "0600ff0901a101850585ffa4850695ff8102b49102c0", false},
-		{"pop-without-push", "0600ff0901a101b4850595ff9102850695ff8102c0", false},
-		{"long-item-skipped", "fe0200aabb850595ff9102850695ff8102", true},
-		{"long-item-truncated", "850595ff9102850695ff8102fe", false},
-		{"four-byte-report-id", "870500000095ff9102870600000095ff8102", true},
-		{"report-id-high-bytes", "86050195ff9102850695ff8102", false},
-		{"empty", "", false},
+		{"stock", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff8102c0", false, false},
+		{"staged-legacy", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff8102c0", true, false},
+		{"staged-v5", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff810209408540953d91020941854195ff8102c0", true, true},
+		{"compact-only", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff810209408540953d91020941854195ff8102c0", true, true},
+		{"compact-missing-input", "0600ff0901a1017508150025ff09408540953d9102c0", false, false},
+		{"staged-without-output", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff810209060907850695ff8102c0", false, false},
+		{"staged-without-input", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907c0", false, false},
+		{"staged-truncated", "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff", false, false},
+		{"ids-swapped", "0600ff0901a101850695ff9102850595ff8102c0", false, false},
+		{"push-pop-restores-report", "0600ff0901a101850585ffa4850695ff8102b49102c0", false, false},
+		{"pop-without-push", "0600ff0901a101b4850595ff9102850695ff8102c0", false, false},
+		{"long-item-skipped", "fe0200aabb850595ff9102850695ff8102", true, false},
+		{"long-item-truncated", "850595ff9102850695ff8102fe", false, false},
+		{"four-byte-report-id", "870500000095ff9102870600000095ff8102", true, false},
+		{"report-id-high-bytes", "86050195ff9102850695ff8102", false, false},
+		{"empty", "", false, false},
 	} {
-		if got := DeclaresControl(mustHex(t, c.hex)); got != c.control {
-			t.Errorf("descriptor %s: DeclaresControl = %v, want %v", c.name, got, c.control)
+		gotControl, gotCompact := DetectControl(mustHex(t, c.hex))
+		if gotControl != c.control || gotCompact != c.compact {
+			t.Errorf("descriptor %s: DetectControl = (%v, %v), want (%v, %v)", c.name, gotControl, gotCompact, c.control, c.compact)
+		}
+		if DeclaresControl(mustHex(t, c.hex)) != c.control {
+			t.Errorf("descriptor %s: DeclaresControl mismatch", c.name)
 		}
 	}
 }
@@ -164,6 +195,54 @@ func TestFrameAndMessageContract(t *testing.T) {
 			t.Errorf("message %s: error %q, want %q", c.name, err, c.want)
 		}
 	}
+	// Compact frames + zstd PackZstd/Unpack contract.
+	for _, kind := range []Kind{KindHello, KindRequest, KindFetch, KindAck, KindReply, KindError} {
+		f := Frame{Kind: kind, Session: 0x12345678, Request: 77, Offset: 0x001234, Total: 0x00fedc, Data: []byte(Hello5)}
+		out := f.EncodeCompactOut()
+		if !MarkedCompact(out[:], CompactOutputID) {
+			t.Fatalf("compact out kind %d not marked", kind)
+		}
+		got, ok := DecodeCompactFrame(out[:], CompactOutputID)
+		if !ok || got.Kind != kind || got.Session != f.Session || got.Request != f.Request || got.Offset != f.Offset || got.Total != f.Total || !bytes.Equal(got.Data, f.Data) {
+			t.Fatalf("compact out kind %d round-trip failed: %+v (%v)", kind, got, ok)
+		}
+		in := f.EncodeCompactIn()
+		gotIn, ok := DecodeCompactFrame(in[:], CompactInputID)
+		if !ok || gotIn.Kind != kind || !bytes.Equal(gotIn.Data, f.Data) {
+			t.Fatalf("compact in kind %d round-trip failed: %+v (%v)", kind, gotIn, ok)
+		}
+	}
+	zstdSource := []byte(strings.Repeat(`{"target":"mic-1","gain":0.0},`, 120))
+	zstdPacked, err := PackZstd(zstdSource, 8192)
+	if err != nil || zstdPacked[0] != 'S' {
+		t.Fatalf("PackZstd failed: err=%v tag=%v", err, zstdPacked)
+	}
+	if decoded, err := Unpack(zstdPacked, 8192); err != nil || !bytes.Equal(decoded, zstdSource) {
+		t.Fatalf("Unpack zstd failed: %v", err)
+	}
+	zstdUnder := bytes.Clone(zstdPacked)
+	binary.LittleEndian.PutUint32(zstdUnder[1:5], 10)
+	zstdOver := bytes.Clone(zstdPacked)
+	binary.LittleEndian.PutUint32(zstdOver[1:5], 7000)
+	zstdOverLimit := bytes.Clone(zstdPacked)
+	binary.LittleEndian.PutUint32(zstdOverLimit[1:5], 9000)
+	for _, bad := range []struct {
+		name  string
+		data  []byte
+		limit int
+	}{
+		{"zstd-truncated", zstdPacked[:len(zstdPacked)-4], 8192},
+		{"zstd-trailing", append(bytes.Clone(zstdPacked), 0), 8192},
+		{"zstd-understated", zstdUnder, 8192},
+		{"zstd-overstated", zstdOver, 8192},
+		{"zstd-over-limit", zstdOverLimit, 8192},
+		{"zstd-short-header", []byte("S\x00\x00"), 8192},
+		{"zstd-size-only", zstdPacked[:5], 8192},
+	} {
+		if _, err := Unpack(bad.data, bad.limit); err == nil {
+			t.Errorf("%s: accepted invalid zstd message", bad.name)
+		}
+	}
 }
 
 func TestRequestAndReplyJSONContract(t *testing.T) {
@@ -172,7 +251,8 @@ func TestRequestAndReplyJSONContract(t *testing.T) {
 		body         json.RawMessage
 		want         string
 	}{
-		{"GET", "api/v1/state", nil, `{"method":"GET","path":"api/v1/state","body":null}`},
+		{"GET", "api/v1/state", nil, `{"method":"GET","path":"api/v1/state"}`},
+		{"GET", "api/v1/events", nil, `{"method":"GET","path":"api/v1/events"}`},
 		{"PUT", "api/v1/config", json.RawMessage(`{"a":[1,2.5,-3,true,false,null],"b":{"c":"d"}}`), `{"method":"PUT","path":"api/v1/config","body":{"a":[1,2.5,-3,true,false,null],"b":{"c":"d"}}}`},
 		{"POST", "a\"b\\c\x01\x1f\b\f\n\r\t é \u2028 <>&", json.RawMessage(`"x\u0000y"`), `{"method":"POST","path":"a\"b\\c\u0001\u001f\b\f\n\r\t é ` + "\u2028" + ` <>&","body":"x\u0000y"}`},
 		{"PATCH", "", json.RawMessage(`[]`), `{"method":"PATCH","path":"","body":[]}`},

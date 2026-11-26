@@ -25,16 +25,20 @@ type Reply struct {
 
 // MarshalJSON encodes the request in declaration field order, compactly, and
 // without HTML escaping. Call it directly rather than json.Marshal, which
-// HTML-escapes <, >, &, U+2028, and U+2029.
+// HTML-escapes <, >, &, U+2028, and U+2029. An empty body is omitted so
+// bodyless GET requests fit a single 62-byte compact HID report.
 func (r Request) MarshalJSON() ([]byte, error) {
 	out := []byte(`{"method":`)
 	out = sjson.AppendString(out, r.Method)
 	out = append(out, `,"path":`...)
 	out = sjson.AppendString(out, r.Path)
-	out = append(out, `,"body":`...)
-	out, err := appendRaw(out, r.Body)
-	if err != nil {
-		return nil, err
+	if len(r.Body) > 0 {
+		out = append(out, `,"body":`...)
+		var err error
+		out, err = appendRaw(out, r.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return append(out, '}'), nil
 }

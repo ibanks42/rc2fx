@@ -15,25 +15,42 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"sync"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
 	ReportSize = 256
 	Header     = 32
 	Payload    = ReportSize - Header
-	OutputID   = 5
-	// RC2FX adds report IDs 5 and 6 to RODE's top-level collection (usage page
-	// ff00, which uses reports 1-4). Any reader on that collection will see
-	// input report 6 and must ignore it; RODE's own software filters by ID.
-	InputID       = 6
-	MaxRequest    = 512*1024 + 1024
-	MaxReply      = 8*1024*1024 + 1024
-	MaxEventBytes = 512 * 1024
-	MaxEventReply = MaxEventBytes + 1024 // event payload plus envelope
-	Magic         = "\xffRC2FX\x00"
-	Hello3        = "RC2FX USB 3"
+	// Legacy 256-byte report IDs (protocol 3/4, kept as a bridge for 0.2.4).
+	OutputID = 5
+	// RC2FX adds report IDs 5/6 (legacy 256-byte bridge) and 64/65 (compact
+	// protocol 5: 62-byte OUT, 256-byte IN) to RODE's top-level collection
+	// (usage page ff00, which uses reports 1-4). RODE's software filters by ID.
+	InputID           = 6
+	CompactOutputID   = 64
+	CompactInputID    = 65
+	CompactOutSize    = 62
+	CompactInSize     = ReportSize
+	CompactHeader     = 20
+	CompactOutPayload = CompactOutSize - CompactHeader
+	CompactInPayload  = CompactInSize - CompactHeader
+	CompactMagic      = "\xffFX"
+	CompactVersion    = 5
+	CompactMaxU24     = 0x00ffffff
+	MaxRequest        = 512*1024 + 1024
+	MaxReply          = 8*1024*1024 + 1024
+	MaxEventBytes     = 512 * 1024
+	MaxEventReply     = MaxEventBytes + 1024 // event payload plus envelope
+	Magic             = "\xffRC2FX\x00"
+	Hello3            = "RC2FX USB 3"
 	// Hello4 is sent by protocol 4 clients; the mixer replies with "RC2FX USB 4 <window>".
 	Hello4 = "RC2FX USB 4"
+	// Hello5 is sent by protocol 5 clients on report 64; the mixer replies with
+	// "RC2FX USB 5 <window>" on report 65.
+	Hello5 = "RC2FX USB 5"
 	// MaxWindow caps how many reports a client may keep in flight. The mixer's
 	// native hook forwards reports via non-blocking datagram sends, so exceeding
 	// the kernel's max_dgram_qlen would silently drop frames.
@@ -43,7 +60,17 @@ const (
 // Hello4Window parses the window size from a protocol 4 hello ack
 // ("RC2FX USB 4 <window>"). A bare "RC2FX USB 4" returns false.
 func Hello4Window(data []byte) (int, bool) {
-	digits, ok := bytes.CutPrefix(data, []byte("RC2FX USB 4 "))
+	return helloWindow(data, Hello4)
+}
+
+// Hello5Window parses the window size from a protocol 5 hello ack
+// ("RC2FX USB 5 <window>"). A bare "RC2FX USB 5" returns false.
+func Hello5Window(data []byte) (int, bool) {
+	return helloWindow(data, Hello5)
+}
+
+func helloWindow(data []byte, hello string) (int, bool) {
+	digits, ok := bytes.CutPrefix(data, []byte(hello+" "))
 	if !ok || len(digits) == 0 {
 		return 0, false
 	}
@@ -99,26 +126,33 @@ type Frame struct {
 	Data    []byte
 }
 
-// Marked reports whether bytes carries the RC2FX magic for the given report ID.
+// Marked reports whether bytes carries the RC2FX legacy magic for the given report ID.
 // This check intentionally runs before full validation so malformed RC2FX
 // packets are never passed through to RODE's command parser.
 func Marked(bytes []byte, report uint8) bool {
 	return len(bytes) >= 8 && bytes[0] == report && string(bytes[1:8]) == Magic
 }
 
-// DeclaresControl inspects a HID report descriptor to check whether RC2FX's
-// input and output report IDs are declared (purely passive, sends nothing).
-func DeclaresControl(descriptor []byte) bool {
+// MarkedCompact reports whether bytes carries the compact protocol 5 magic for report.
+func MarkedCompact(bytes []byte, report uint8) bool {
+	return len(bytes) >= 4 && bytes[0] == report && string(bytes[1:4]) == CompactMagic
+}
+
+// DetectControl inspects a HID report descriptor and reports whether RC2FX's
+// control reports are declared (either compact 64/65 or legacy 5/6) and
+// whether compact reports 64/65 are present.
+func DetectControl(descriptor []byte) (control, compact bool) {
 	var report uint32
 	var stack []uint32
-	output, input := false, false
+	outLegacy, inLegacy := false, false
+	outCompact, inCompact := false, false
 	i := 0
 	for i < len(descriptor) {
 		prefix := descriptor[i]
 		i++
 		if prefix == 0xfe {
 			if i >= len(descriptor) {
-				return false
+				return false, false
 			}
 			size := int(descriptor[i])
 			i += 2 + size
@@ -129,7 +163,7 @@ func DeclaresControl(descriptor []byte) bool {
 			n = 4
 		}
 		if i+n > len(descriptor) {
-			return false
+			return false, false
 		}
 		item := descriptor[i : i+n]
 		i += n
@@ -144,20 +178,40 @@ func DeclaresControl(descriptor []byte) bool {
 			stack = append(stack, report)
 		case 0xb4:
 			if len(stack) == 0 {
-				return false
+				return false, false
 			}
 			report = stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 		case 0x80:
-			input = input || report == InputID
+			inLegacy = inLegacy || report == InputID
+			inCompact = inCompact || report == CompactInputID
 		case 0x90:
-			output = output || report == OutputID
+			outLegacy = outLegacy || report == OutputID
+			outCompact = outCompact || report == CompactOutputID
 		}
 	}
-	return output && input
+	compact = outCompact && inCompact
+	control = compact || (outLegacy && inLegacy)
+	return control, compact
 }
 
-// DecodeFrame decodes one report with the given ID.
+// DeclaresControl reports whether descriptor declares RC2FX control reports.
+func DeclaresControl(descriptor []byte) bool {
+	control, _ := DetectControl(descriptor)
+	return control
+}
+
+func readU24LE(b []byte) int {
+	return int(b[0]) | int(b[1])<<8 | int(b[2])<<16
+}
+
+func putU24LE(b []byte, v int) {
+	b[0] = byte(v)
+	b[1] = byte(v >> 8)
+	b[2] = byte(v >> 16)
+}
+
+// DecodeFrame decodes one legacy 256-byte report with the given ID.
 func DecodeFrame(bytes []byte, report uint8) (Frame, bool) {
 	if len(bytes) != ReportSize || !Marked(bytes, report) || bytes[8] != 3 {
 		return Frame{}, false
@@ -180,8 +234,43 @@ func DecodeFrame(bytes []byte, report uint8) (Frame, bool) {
 	}, true
 }
 
-// Encode serializes f into a fixed-size HID report. Panics if Data exceeds
-// Payload or if Offset/Total don't fit in uint32.
+// DecodeCompactFrame decodes one compact protocol 5 report (report 64 OUT or report 65 IN).
+func DecodeCompactFrame(bytes []byte, report uint8) (Frame, bool) {
+	var expected int
+	switch report {
+	case CompactOutputID:
+		expected = CompactOutSize
+	case CompactInputID:
+		expected = CompactInSize
+	default:
+		return Frame{}, false
+	}
+	if len(bytes) != expected || !MarkedCompact(bytes, report) {
+		return Frame{}, false
+	}
+	if bytes[4]>>4 != CompactVersion {
+		return Frame{}, false
+	}
+	kind := Kind(bytes[4] & 0x0f)
+	if kind < KindHello || kind > KindError {
+		return Frame{}, false
+	}
+	n := int(bytes[5])
+	if n > expected-CompactHeader {
+		return Frame{}, false
+	}
+	return Frame{
+		Kind:    kind,
+		Session: uint64(binary.LittleEndian.Uint32(bytes[6:10])),
+		Request: binary.LittleEndian.Uint32(bytes[10:14]),
+		Offset:  readU24LE(bytes[14:17]),
+		Total:   readU24LE(bytes[17:20]),
+		Data:    bytes[CompactHeader : CompactHeader+n],
+	}, true
+}
+
+// Encode serializes f into a fixed-size legacy 256-byte HID report. Panics if
+// Data exceeds Payload or if Offset/Total don't fit in uint32.
 func (f *Frame) Encode(report uint8) [ReportSize]byte {
 	if len(f.Data) > Payload || f.Offset < 0 || uint64(f.Offset) > math.MaxUint32 ||
 		f.Total < 0 || uint64(f.Total) > math.MaxUint32 {
@@ -201,6 +290,52 @@ func (f *Frame) Encode(report uint8) [ReportSize]byte {
 	return bytes
 }
 
+func (f *Frame) writeCompact(dst []byte, report uint8) {
+	if f.Session > math.MaxUint32 || f.Offset < 0 || f.Offset > CompactMaxU24 ||
+		f.Total < 0 || f.Total > CompactMaxU24 || len(f.Data) > len(dst)-CompactHeader {
+		panic("usbproto: compact frame does not fit a report")
+	}
+	dst[0] = report
+	copy(dst[1:4], CompactMagic)
+	dst[4] = (CompactVersion << 4) | uint8(f.Kind)
+	dst[5] = uint8(len(f.Data))
+	binary.LittleEndian.PutUint32(dst[6:10], uint32(f.Session))
+	binary.LittleEndian.PutUint32(dst[10:14], f.Request)
+	putU24LE(dst[14:17], f.Offset)
+	putU24LE(dst[17:20], f.Total)
+	copy(dst[CompactHeader:], f.Data)
+}
+
+// EncodeCompactOut serializes f into a 62-byte compact output report (report 64).
+func (f *Frame) EncodeCompactOut() [CompactOutSize]byte {
+	var bytes [CompactOutSize]byte
+	f.writeCompact(bytes[:], CompactOutputID)
+	return bytes
+}
+
+// EncodeCompactIn serializes f into a 256-byte compact input report (report 65).
+func (f *Frame) EncodeCompactIn() [CompactInSize]byte {
+	var bytes [CompactInSize]byte
+	f.writeCompact(bytes[:], CompactInputID)
+	return bytes
+}
+
+var (
+	zstdEncOnce sync.Once
+	zstdEnc     *zstd.Encoder
+	zstdEncErr  error
+)
+
+func zstdEncoder() (*zstd.Encoder, error) {
+	zstdEncOnce.Do(func() {
+		zstdEnc, zstdEncErr = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedDefault),
+			zstd.WithEncoderConcurrency(1),
+		)
+	})
+	return zstdEnc, zstdEncErr
+}
+
 var (
 	errTooLarge        = errors.New("USB message too large")
 	errDecodedTooLarge = errors.New("Decoded USB message too large")
@@ -210,9 +345,9 @@ var (
 	errInflate = errors.New("deflate decompression error")
 )
 
-// Pack encodes a JSON message, compressing with zlib when that saves space.
-// Unpack enforces the declared decoded size to reject zip bombs, truncation,
-// and trailing bytes.
+// Pack encodes a JSON message, compressing with zlib when that saves space
+// (legacy protocol 3/4 sessions). Unpack enforces the declared decoded size to
+// reject zip bombs, truncation, and trailing bytes.
 func Pack(json []byte, limit int) ([]byte, error) {
 	if len(json) > limit || uint64(len(json)) > math.MaxUint32 {
 		return nil, errTooLarge
@@ -228,12 +363,30 @@ func Pack(json []byte, limit int) ([]byte, error) {
 	if err := encoder.Close(); err != nil {
 		return nil, err
 	}
+	return finishPacked('Z', json, compressed.Bytes(), limit)
+}
+
+// PackZstd encodes a JSON message with zstd when that saves space (protocol 5
+// compact sessions). Falls back to raw `J` when compression does not shrink it.
+func PackZstd(json []byte, limit int) ([]byte, error) {
+	if len(json) > limit || uint64(len(json)) > math.MaxUint32 {
+		return nil, errTooLarge
+	}
+	enc, err := zstdEncoder()
+	if err != nil {
+		return nil, err
+	}
+	compressed := enc.EncodeAll(json, nil)
+	return finishPacked('S', json, compressed, limit)
+}
+
+func finishPacked(tag byte, json, compressed []byte, limit int) ([]byte, error) {
 	var encoded []byte
-	if compressed.Len()+5 < len(json)+1 {
-		encoded = make([]byte, 0, 5+compressed.Len())
-		encoded = append(encoded, 'Z')
+	if len(compressed)+5 < len(json)+1 {
+		encoded = make([]byte, 0, 5+len(compressed))
+		encoded = append(encoded, tag)
 		encoded = binary.LittleEndian.AppendUint32(encoded, uint32(len(json)))
-		encoded = append(encoded, compressed.Bytes()...)
+		encoded = append(encoded, compressed...)
 	} else {
 		encoded = make([]byte, 0, 1+len(json))
 		encoded = append(encoded, 'J')
@@ -245,8 +398,8 @@ func Pack(json []byte, limit int) ([]byte, error) {
 	return encoded, nil
 }
 
-// Unpack decodes a message produced by Pack, rejecting inputs whose compressed
-// or uncompressed size exceeds limit.
+// Unpack decodes a message produced by Pack or PackZstd, rejecting inputs whose
+// compressed or uncompressed size exceeds limit.
 func Unpack(encoded []byte, limit int) ([]byte, error) {
 	if len(encoded) > limit {
 		return nil, errTooLarge
@@ -260,8 +413,44 @@ func Unpack(encoded []byte, limit int) ([]byte, error) {
 			return nil, errDecodedTooLarge
 		}
 		return inflate(encoded[5:], int(size))
+	case len(encoded) >= 5 && encoded[0] == 'S':
+		size := uint64(binary.LittleEndian.Uint32(encoded[1:5]))
+		if size > uint64(limit) {
+			return nil, errDecodedTooLarge
+		}
+		return unzstd(encoded[5:], int(size))
 	}
 	return nil, errEncoding
+}
+
+func unzstd(stream []byte, size int) ([]byte, error) {
+	if len(stream) == 0 {
+		return nil, errInvalidZ
+	}
+	var hdr zstd.Header
+	if err := hdr.Decode(stream); err != nil {
+		return nil, errInvalidZ
+	}
+	if hdr.HasFCS && hdr.FrameContentSize != uint64(size) {
+		return nil, errInvalidZ
+	}
+	dec, err := zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxWindow(8<<20),
+		zstd.WithDecodeAllCapLimit(true),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer dec.Close()
+	decoded, err := dec.DecodeAll(stream, make([]byte, 0, size))
+	if err != nil {
+		return nil, errInvalidZ
+	}
+	if len(decoded) != size {
+		return nil, errInvalidZ
+	}
+	return decoded, nil
 }
 
 // inflate decompresses a single zlib stream and verifies it produces exactly

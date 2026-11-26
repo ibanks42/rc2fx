@@ -115,10 +115,12 @@ manifest_check_failed() {
 }
 
 # Keep RODE's HID descriptor intact up to its final End Collection and add
-# RC2FX output report 5 / input report 6 inside that same collection. A second
-# top-level collection shows up as a separate HID device on Windows and can
-# break RODE's Virtual Device Driver; the USB controller also has no spare IN
-# endpoint. Staged in /run only and substituted by the native hook.
+# RC2FX legacy reports 5/6 (256 bytes, temporary 0.2.4 bridge) and compact
+# reports 64/65 (62-byte single-packet out, 256-byte in) inside that same
+# collection. A second top-level collection shows up as a separate HID device
+# on Windows and can break RODE's Virtual Device Driver; the USB controller
+# also has no spare IN endpoint. Staged in /run only and substituted by the
+# native hook.
 #
 # Lift RT throttling while RC2FX runs (restored on exit): hitting the 950 ms/s
 # kernel cap previously stalled CPU 0's USB gadget IRQ thread and wedged USB 1
@@ -146,8 +148,11 @@ prepare_usb() {
 		return 0
 	fi
 	# The qualified descriptor is 46 bytes and ends with End Collection (c0).
+	# Keep legacy report 5 (256B out) and report 6 (256B in) as a transition
+	# bridge for 0.2.4 desktop clients, and add report 64 (62B out, single USB
+	# packet) and report 65 (256B in) for 0.2.5+ clients.
 	head -c 45 "$descriptor" >"$run/usb-report.bin"
-	printf '\x09\x06\x85\x05\x95\xff\x91\x02\x09\x07\x85\x06\x95\xff\x81\x02\xc0' >>"$run/usb-report.bin"
+	printf '\x09\x06\x85\x05\x95\xff\x91\x02\x09\x07\x85\x06\x95\xff\x81\x02\x09\x40\x85\x40\x95\x3d\x91\x02\x09\x41\x85\x41\x95\xff\x81\x02\xc0' >>"$run/usb-report.bin"
 	sed "s|^HID_REPORT_DESC=/etc/init.d/rc-hid-descriptor.bin |HID_REPORT_DESC=$run/usb-report.bin |" "$script" >"$run/usb-gadget.sh"
 	# Without both staged scripts the native hook leaves stock USB setup alone.
 	if ! grep -q "^HID_REPORT_DESC=$run/usb-report.bin " "$run/usb-gadget.sh"; then

@@ -250,6 +250,26 @@ func runUSB() {
 			Decoded: hex.EncodeToString(c.data),
 		})
 	}
+	for _, c := range []struct {
+		name  string
+		data  []byte
+		limit int
+	}{
+		{"zstd-plain", plain, 64},
+		{"zstd-compressed", compressed, 8192},
+		{"zstd-reply-large", replyLarge, usbproto.MaxReply},
+	} {
+		packed, err := usbproto.PackZstd(c.data, c.limit)
+		if err != nil {
+			fatalf("usb pack zstd %s: %v", c.name, err)
+		}
+		msgs = append(msgs, msgOut{
+			Name:    c.name,
+			Limit:   c.limit,
+			Packed:  hex.EncodeToString(packed),
+			Decoded: hex.EncodeToString(c.data),
+		})
+	}
 
 	var frames []frameOut
 	for _, c := range []struct {
@@ -275,9 +295,40 @@ func runUSB() {
 			Data:   hex.EncodeToString(c.frame.Data),
 		})
 	}
+	var compactFrames []frameOut
+	for _, c := range []struct {
+		name   string
+		report uint8
+		frame  usbproto.Frame
+	}{
+		{"compact-hello", usbproto.CompactOutputID, usbproto.Frame{Kind: usbproto.KindHello, Session: 0x12345678, Request: 0, Data: []byte(usbproto.Hello5)}},
+		{"compact-request-full", usbproto.CompactOutputID, usbproto.Frame{Kind: usbproto.KindRequest, Session: 0xdeadbeef, Request: 42, Offset: 42, Total: 12345, Data: []byte(strings.Repeat("a", usbproto.CompactOutPayload))}},
+		{"compact-reply-full", usbproto.CompactInputID, usbproto.Frame{Kind: usbproto.KindReply, Session: 0xffffffff, Request: math.MaxUint32, Offset: usbproto.CompactMaxU24, Total: usbproto.CompactMaxU24, Data: []byte(strings.Repeat("b", usbproto.CompactInPayload))}},
+	} {
+		var raw []byte
+		if c.report == usbproto.CompactOutputID {
+			buf := c.frame.EncodeCompactOut()
+			raw = buf[:]
+		} else {
+			buf := c.frame.EncodeCompactIn()
+			raw = buf[:]
+		}
+		compactFrames = append(compactFrames, frameOut{
+			Name:   c.name,
+			Report: c.report,
+			Raw:    hex.EncodeToString(raw),
+			Kind:   uint8(c.frame.Kind),
+			Sess:   c.frame.Session,
+			Req:    c.frame.Request,
+			Offset: c.frame.Offset,
+			Total:  c.frame.Total,
+			Data:   hex.EncodeToString(c.frame.Data),
+		})
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"messages": msgs,
-		"frames":   frames,
+		"messages":      msgs,
+		"frames":        frames,
+		"compactFrames": compactFrames,
 	}); err != nil {
 		fatalf("encode usb: %v", err)
 	}

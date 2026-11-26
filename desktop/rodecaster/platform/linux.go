@@ -365,15 +365,17 @@ func (host) Inventory() ([]HID, error) {
 			return nil, platformError(fmt.Sprintf("read USB report descriptor: %v", err))
 		}
 		if VendorUsage(descriptor) {
+			control, compact := declaresControl(descriptor)
 			result = append(result, HID{
-				Path:    "/dev/" + entry.Name(),
-				Serial:  serial,
-				PID:     pid,
-				Usage:   0xff00,
-				Input:   4096,
-				Output:  64,
-				Control: declaresControl(descriptor),
-				Release: usbRelease(filepath.Join(p, "device")),
+				Path:           "/dev/" + entry.Name(),
+				Serial:         serial,
+				PID:            pid,
+				Usage:          0xff00,
+				Input:          4096,
+				Output:         64,
+				Control:        control,
+				CompactControl: compact,
+				Release:        usbRelease(filepath.Join(p, "device")),
 			})
 		}
 	}

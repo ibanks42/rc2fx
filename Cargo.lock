@@ -968,6 +968,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "zstd",
 ]
 
 [[package]]

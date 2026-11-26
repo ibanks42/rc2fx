@@ -56,6 +56,41 @@ fn frames_and_go_interop_match() {
         );
         assert_eq!(f.encode(id).as_slice(), report.as_slice(), "{name}");
     }
+    for case in interop["compactFrames"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let report = hex(case["raw"].as_str().unwrap());
+        let id = case["report"].as_u64().unwrap() as u8;
+        assert!(rc2fx_usb::marked_compact(&report, id), "{name} marked");
+        let f =
+            Frame::decode_compact(&report, id).unwrap_or_else(|| panic!("{name} did not decode"));
+        assert_eq!(f.kind as u64, case["kind"].as_u64().unwrap(), "{name}");
+        assert_eq!(f.session, case["session"].as_u64().unwrap(), "{name}");
+        assert_eq!(
+            u64::from(f.request),
+            case["request"].as_u64().unwrap(),
+            "{name}"
+        );
+        assert_eq!(f.offset as u64, case["offset"].as_u64().unwrap(), "{name}");
+        assert_eq!(f.total as u64, case["total"].as_u64().unwrap(), "{name}");
+        assert_eq!(
+            f.data,
+            hex(case["data"].as_str().unwrap()).as_slice(),
+            "{name}"
+        );
+        if id == rc2fx_usb::COMPACT_OUTPUT_ID {
+            assert_eq!(
+                f.encode_compact_out().as_slice(),
+                report.as_slice(),
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                f.encode_compact_in().as_slice(),
+                report.as_slice(),
+                "{name}"
+            );
+        }
+    }
 
     // Frozen wire-layout checks across all 6 kinds and invalid frame mutations.
     for (i, kind) in [
@@ -185,7 +220,11 @@ fn go_packed_messages_unpack_and_malformed_messages_are_rejected() {
             Ok(want.as_slice()),
             "{name}"
         );
-        let repacked = rc2fx_usb::pack(&want, limit).unwrap();
+        let repacked = if name.starts_with("zstd-") {
+            rc2fx_usb::pack_zstd(&want, limit).unwrap()
+        } else {
+            rc2fx_usb::pack(&want, limit).unwrap()
+        };
         assert_eq!(rc2fx_usb::unpack(&repacked, limit).unwrap(), want, "{name}");
     }
 

@@ -288,20 +288,19 @@ pub unsafe extern "C" fn open(
         return unsafe { original(path, flags, mode) };
     }
     // On a cold boot `/dev/hidg0` doesn't exist until the mixer creates the
-    // gadget. On a restart over a kept gadget it already exists, and opening it
-    // before startup finishes can segfault if host reports arrive early
-    // (observed 2026-10-26). Return ENOENT until startup completes.
+    // gadget. On a restart over an existing gadget (kept or descriptor-changed)
+    // it already exists, and opening it before startup finishes can segfault if
+    // host reports arrive early (observed 2026-10-26) or let a teardown shell
+    // inherit the non-CLOEXEC fd and block `usb-stop.sh`. Return ENOENT until
+    // startup's `uac2_gadget.sh start` clears `STARTING`.
     if unsafe { CStr::from_ptr(path) }.to_bytes() == HID_NODE.as_bytes()
+        && BRIDGE.get().is_some()
         && STARTING.load(Ordering::Acquire)
         && LOADED.get().is_some_and(|t| t.elapsed() < STARTUP_WINDOW)
-        && live(
-            Path::new(GADGET_DIR),
-            Path::new(STAGED_DESCRIPTOR),
-            Path::new(HID_NODE),
-        )
-        .ready
+        && Path::new("/run/rc2fx/usb-gadget.sh").is_file()
+        && Path::new("/run/rc2fx/usb-stop.sh").is_file()
     {
-        eprintln!("RC2FX USB gadget kept: HID node open deferred until the mixer has started");
+        eprintln!("RC2FX USB startup: HID node open deferred until the mixer has started");
         unsafe { *libc::__errno_location() = libc::ENOENT };
         return -1;
     }
@@ -399,7 +398,9 @@ unsafe fn take(
         return (Taken::Vendor, true);
     }
     let bytes = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), n as usize) };
-    if !rc2fx_usb::marked(bytes, rc2fx_usb::OUTPUT_ID) {
+    let is_legacy = rc2fx_usb::marked(bytes, rc2fx_usb::OUTPUT_ID);
+    let is_compact = rc2fx_usb::marked_compact(bytes, rc2fx_usb::COMPACT_OUTPUT_ID);
+    if !is_legacy && !is_compact {
         return (Taken::Vendor, true);
     }
     let first = MARKED.fetch_add(1, Ordering::Relaxed) < 3;
@@ -432,13 +433,20 @@ unsafe fn take(
     if first {
         eprintln!("RC2FX USB received report: bytes={n}");
     }
-    if let Some(bytes) = rc2fx_usb::canonical_output(bytes) {
+    let output = if is_compact {
+        rc2fx_usb::compact_output(bytes)
+    } else {
+        rc2fx_usb::canonical_output(bytes)
+    };
+    if let Some(bytes) = output {
         let result = deliver(socket, path, bytes);
         if first {
-            eprintln!(
-                "RC2FX USB local delivery: {result:?}; valid frame={}",
+            let valid = if is_compact {
+                rc2fx_usb::Frame::decode_compact(bytes, rc2fx_usb::COMPACT_OUTPUT_ID).is_some()
+            } else {
                 rc2fx_usb::Frame::decode(bytes, rc2fx_usb::OUTPUT_ID).is_some()
-            );
+            };
+            eprintln!("RC2FX USB local delivery: {result:?}; valid frame={valid}");
         }
     } else if first {
         eprintln!(

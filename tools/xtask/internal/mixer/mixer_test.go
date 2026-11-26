@@ -191,11 +191,21 @@ func items(t *testing.T, descriptor []byte) []byte {
 
 func TestStagedDescriptorKeepsRodesItemsInOneCollection(t *testing.T) {
 	descriptor := staged(t)
-	if len(descriptor) != 62 {
+	if len(descriptor) != 78 {
 		t.Fatalf("%d bytes", len(descriptor))
 	}
 	if !bytes.Equal(descriptor[:len(stock)-1], stock[:len(stock)-1]) {
 		t.Fatal("the stock items changed")
+	}
+	// Report 64: Usage 0x40, Report ID 64, Report Count 61 (62 bytes total), Output.
+	// Report 65: Usage 0x41, Report ID 65, Report Count 255 (256 bytes total), Input.
+	wantCompact := []byte{
+		0x09, 0x40, 0x85, 0x40, 0x95, 0x3d, 0x91, 0x02,
+		0x09, 0x41, 0x85, 0x41, 0x95, 0xff, 0x81, 0x02,
+		0xc0,
+	}
+	if !bytes.HasSuffix(descriptor, wantCompact) {
+		t.Fatalf("missing compact reports 64/65 suffix: %x", descriptor[len(stock)-1:])
 	}
 	prefixes := items(t, descriptor)
 	// One application collection, closed once at the very end: Windows
@@ -212,7 +222,8 @@ func TestStagedDescriptorKeepsRodesItemsInOneCollection(t *testing.T) {
 	if opens != 1 || closes != 1 || prefixes[len(prefixes)-1] != 0xc0 {
 		t.Fatalf("%x", prefixes)
 	}
-	if !usbproto.DeclaresControl(descriptor) || usbproto.DeclaresControl(stock) {
+	control, compact := usbproto.DetectControl(descriptor)
+	if !control || !compact || usbproto.DeclaresControl(stock) {
 		t.Fatal("control reports")
 	}
 }
