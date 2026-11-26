@@ -2,6 +2,16 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.3.1] - 2026-11-26
+
+### Features
+
+- *(desktop)* Show persistent update toast for mixer updates
+
+### Maintenance
+
+- *(mixer-release)* 0.3.0
+
 ## [0.3.0] - 2026-11-26
 
 ### Features
