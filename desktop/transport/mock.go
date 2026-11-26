@@ -114,6 +114,10 @@ func (connection) Reopen() error {
 	return nil
 }
 
+func (connection) IsCompact() bool {
+	return true
+}
+
 // openSession stands the mock mixer in for USB 1.
 func openSession() (Session, string, error) {
 	return openConnection(), mockSerial, nil
@@ -617,19 +621,20 @@ func (m *mockMixer) applyLive(update core.ConfigUpdate) (usbproto.Reply, *refuse
 	if failed := m.checkRevision(update.ExpectedRevision); failed != nil {
 		return usbproto.Reply{}, failed
 	}
-	if err := m.config.ValidateUpdate(update.Targets); err != nil {
+	merged, err := m.config.ResolveLiveUpdate(update.Targets)
+	if err != nil {
 		return usbproto.Reply{}, &refused{mockFailure(400, fmt.Sprintf("invalid request: %s", err))}
 	}
 	if m.engine.Status != core.EnginePhaseRunning {
 		return usbproto.Reply{}, &refused{mockFailure(503, "the engine is not running")}
 	}
-	if core.LiveNeedsSave(m.running(), update.Targets) {
+	if core.LiveNeedsSave(m.running(), merged) {
 		return usbproto.Reply{}, &refused{mockFailure(422, "liveRequiresSave: this change needs a save")}
 	}
-	if core.TargetsEqual(m.config.Targets, update.Targets) {
+	if core.TargetsEqual(m.config.Targets, merged) {
 		m.liveTargets = nil
 	} else {
-		m.liveTargets = core.CloneTargets(update.Targets)
+		m.liveTargets = core.CloneTargets(merged)
 	}
 	return mockReply(200, object(member{"accepted", json.RawMessage("true")},
 		member{"baseRevision", json.RawMessage(strconv.FormatUint(m.config.Revision, 10))})), nil

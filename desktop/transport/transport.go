@@ -757,8 +757,15 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event, conn
 			if command.Generation != generation || current == nil {
 				continue
 			}
+			update := command.Update
+			if current.usb.isCompact() && command.Partial != nil {
+				update = core.ConfigUpdate{
+					ExpectedRevision: update.ExpectedRevision,
+					Targets:          command.Partial,
+				}
+			}
 			kind := EventKindLiveApplied{Result: LiveAccepted}
-			if _, failed := current.request(ctx, "PUT", "api/v1/live", applyBody(command.Update)); failed != nil {
+			if _, failed := current.request(ctx, "PUT", "api/v1/live", applyBody(update)); failed != nil {
 				switch {
 				case failed.isStatus(404):
 					kind.Result = LiveUnsupported

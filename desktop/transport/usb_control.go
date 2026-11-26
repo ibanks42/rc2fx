@@ -41,6 +41,7 @@ type Session interface {
 type usbLink struct {
 	jobs    chan job
 	stopped chan struct{}
+	compact bool
 	mu      sync.Mutex
 	holders int
 }
@@ -48,6 +49,10 @@ type usbLink struct {
 // Usb is one holder's handle on the session. Each holder releases its own.
 type Usb struct {
 	link *usbLink
+}
+
+func (u Usb) isCompact() bool {
+	return u.link != nil && u.link.compact
 }
 
 func (u Usb) clone() Usb {
@@ -87,6 +92,9 @@ func connectUSB(ctx context.Context) (Usb, string, error) {
 		if err != nil {
 			ready <- opened{err: err}
 			return
+		}
+		if compact, ok := session.(interface{ IsCompact() bool }); ok {
+			link.compact = compact.IsCompact()
 		}
 		ready <- opened{serial: serial}
 		serve(link.jobs, session)

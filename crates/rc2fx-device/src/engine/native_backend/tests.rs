@@ -1088,10 +1088,16 @@ fn live_refusals_leave_the_audio_and_the_settings_alone() {
         controller.live_native(stale, &mut runtime),
         Err(Error::Store(StoreError::Conflict))
     ));
-    let mut short = gain_update(&controller, -6.0);
-    short.targets.pop();
+    let mut unknown = gain_update(&controller, -6.0);
+    unknown.targets[0].id = "unknown-target".into();
     assert!(matches!(
-        controller.live_native(short, &mut runtime),
+        controller.live_native(unknown, &mut runtime),
+        Err(Error::Store(StoreError::Invalid(_)))
+    ));
+    let mut duplicate = gain_update(&controller, -6.0);
+    duplicate.targets.push(duplicate.targets[0].clone());
+    assert!(matches!(
+        controller.live_native(duplicate, &mut runtime),
         Err(Error::Store(StoreError::Invalid(_)))
     ));
     let mut suppressed = gain_update(&controller, 0.0);
@@ -1845,6 +1851,122 @@ mod coordinator_loop {
             last_mic_preparation(&peer).fingerprint,
             mic_fingerprint(&update.targets)
         );
+        // Partial live update: send only the changed target (single-target PUT).
+        let mut partial_target = update
+            .targets
+            .iter()
+            .find(|target| target.id == "mic-1")
+            .unwrap()
+            .clone();
+        partial_target.gain.db = -8.0;
+        let partial = ConfigUpdate {
+            expected_revision: state.config.revision,
+            targets: vec![partial_target.clone()],
+        };
+        let mut reply = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&partial).unwrap(),
+        )
+        .await;
+        for _ in 0..50 {
+            if reply.status != 503 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            reply = put(
+                &mut api,
+                "api/v1/live",
+                serde_json::to_value(&partial).unwrap(),
+            )
+            .await;
+        }
+        assert_eq!(reply.status, 200, "{}", reply.body.get());
+        let mut expected_targets = update.targets.clone();
+        *expected_targets
+            .iter_mut()
+            .find(|t| t.id == "mic-1")
+            .unwrap() = partial_target;
+        assert_eq!(
+            last_mic_preparation(&peer).fingerprint,
+            mic_fingerprint(&expected_targets)
+        );
+        // Empty targets array reverts live edits back to saved settings.
+        let revert = ConfigUpdate {
+            expected_revision: state.config.revision,
+            targets: vec![],
+        };
+        let mut reply = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&revert).unwrap(),
+        )
+        .await;
+        for _ in 0..50 {
+            if reply.status != 503 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            reply = put(
+                &mut api,
+                "api/v1/live",
+                serde_json::to_value(&revert).unwrap(),
+            )
+            .await;
+        }
+        assert_eq!(reply.status, 200, "{}", reply.body.get());
+        assert_eq!(
+            last_mic_preparation(&peer).fingerprint,
+            mic_fingerprint(&state.config.targets)
+        );
+        // Unknown target ID is rejected with 400.
+        let mut bogus = update.targets[0].clone();
+        bogus.id = "does-not-exist".into();
+        let bad_partial = ConfigUpdate {
+            expected_revision: state.config.revision,
+            targets: vec![bogus],
+        };
+        assert_eq!(
+            put(
+                &mut api,
+                "api/v1/live",
+                serde_json::to_value(&bad_partial).unwrap()
+            )
+            .await
+            .status,
+            400
+        );
+        // Re-apply the -6.0 edit via partial single-target update before saving `update`.
+        let reapply = ConfigUpdate {
+            expected_revision: state.config.revision,
+            targets: vec![
+                update
+                    .targets
+                    .iter()
+                    .find(|target| target.id == "mic-1")
+                    .unwrap()
+                    .clone(),
+            ],
+        };
+        let mut reply = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&reapply).unwrap(),
+        )
+        .await;
+        for _ in 0..50 {
+            if reply.status != 503 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            reply = put(
+                &mut api,
+                "api/v1/live",
+                serde_json::to_value(&reapply).unwrap(),
+            )
+            .await;
+        }
+        assert_eq!(reply.status, 200, "{}", reply.body.get());
         let mut stale = serde_json::to_value(&update).unwrap();
         stale["expectedRevision"] = serde_json::json!(state.config.revision + 1);
         assert_eq!(put(&mut api, "api/v1/live", stale).await.status, 409);

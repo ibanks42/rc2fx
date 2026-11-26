@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ibanks42/goui-kit/gk"
+
+	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
 func TestWindowsMatchThePackagedDesktopIdentity(t *testing.T) {
@@ -88,5 +90,19 @@ func TestPrettyReportKeepsScalarArraysInline(t *testing.T) {
 	}
 	if !strings.Contains(pretty, "\"items\": [\n") {
 		t.Fatalf("expected multi-line object array:\n%s", pretty)
+	}
+}
+
+func TestChangedTargetsReturnsOnlyModifiedChannels(t *testing.T) {
+	cfg := core.DefaultConfig()
+	saved := core.CloneTargets(cfg.Targets)
+	draft := core.CloneTargets(cfg.Targets)
+	if got := changedTargets(draft, saved); got == nil || len(got) != 0 {
+		t.Fatalf("unchanged: got %v (nil=%v), want empty non-nil slice", len(got), got == nil)
+	}
+	draft[0].Gain.DB = -5.0
+	got := changedTargets(draft, saved)
+	if len(got) != 1 || got[0].ID != draft[0].ID || got[0].Gain.DB != -5.0 {
+		t.Fatalf("single change: got %+v", got)
 	}
 }

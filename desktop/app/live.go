@@ -40,7 +40,11 @@ func (a *App) syncLive(cx *gk.Cx) {
 		if err != nil {
 			a.message = err.Error()
 		}
-		if err != nil || !a.command(transport.CommandLive{Generation: a.generation, Update: pending.Request}) {
+		if err != nil || !a.command(transport.CommandLive{
+			Generation: a.generation,
+			Update:     pending.Request,
+			Partial:    changedTargets(pending.Request.Targets, saved),
+		}) {
 			a.live.LiveAnswered(false, false, true, false, now)
 		}
 		return
@@ -200,4 +204,26 @@ func ago(d time.Duration) string {
 		return fmt.Sprintf("%d min ago", int(d/time.Minute))
 	}
 	return fmt.Sprintf("%d h ago", int(d/time.Hour))
+}
+
+// changedTargets returns the subset of targets that differ from saved (non-nil
+// empty slice when all targets match saved).
+func changedTargets(targets, saved []core.Target) []core.Target {
+	changed := make([]core.Target, 0, 2)
+	for i := range targets {
+		found := false
+		for j := range saved {
+			if saved[j].ID == targets[i].ID {
+				found = true
+				if !saved[j].Equal(targets[i]) {
+					changed = append(changed, targets[i].Clone())
+				}
+				break
+			}
+		}
+		if !found {
+			changed = append(changed, targets[i].Clone())
+		}
+	}
+	return changed
 }

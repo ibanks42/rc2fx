@@ -28,6 +28,10 @@ func (s clientSession) Reopen() error {
 	return s.client.Reopen()
 }
 
+func (s clientSession) IsCompact() bool {
+	return s.client.IsCompact()
+}
+
 // Close closes the HID handle once the session is no longer served.
 func (s clientSession) Close() {
 	s.client.Close()

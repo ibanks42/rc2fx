@@ -224,20 +224,20 @@ impl Controller {
         if update.expected_revision != saved.revision {
             return Err(StoreError::Conflict.into());
         }
-        saved
-            .validate_update(&update.targets)
+        let merged = saved
+            .resolve_live_update(&update.targets)
             .map_err(|error| StoreError::Invalid(error.to_string()))?;
         if !self.settled() {
             return Err(Error::LiveUnavailable);
         }
         // Compared with what plays now: the last live edit, or the saved settings.
         let running = runtime.live_targets().unwrap_or(saved.targets.as_slice());
-        if let Some(reason) = live_needs_save(running, &update.targets) {
+        if let Some(reason) = live_needs_save(running, &merged) {
             return Err(Error::LiveRequiresSave(reason));
         }
         let revision = saved.revision;
         let candidate = rc2fx_core::Config {
-            targets: update.targets,
+            targets: merged,
             ..saved.clone()
         };
         runtime.live(&candidate, saved)?;

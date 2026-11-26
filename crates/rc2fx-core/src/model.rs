@@ -468,6 +468,30 @@ impl Config {
         }
         Ok(())
     }
+
+    /// Merges a full or partial live-edit target list onto `self.targets`,
+    /// rejecting unknown or duplicate target IDs, and validates the merged
+    /// catalog with `validate_update`.
+    pub fn resolve_live_update(&self, targets: &[Target]) -> Result<Vec<Target>> {
+        if targets.len() > self.targets.len() {
+            return Err(CoreError(
+                "Live update contains unknown or duplicate targets".into(),
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut merged = self.targets.clone();
+        for target in targets {
+            if !seen.insert(target.id.as_str()) {
+                return Err(CoreError(format!("Duplicate target id: {}", target.id)));
+            }
+            let Some(slot) = merged.iter_mut().find(|existing| existing.id == target.id) else {
+                return Err(CoreError(format!("Unknown target id: {}", target.id)));
+            };
+            *slot = target.clone();
+        }
+        self.validate_update(&merged)?;
+        Ok(merged)
+    }
 }
 impl Default for Config {
     fn default() -> Self {

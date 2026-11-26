@@ -625,6 +625,38 @@ func (c Config) ValidateUpdate(targets []Target) error {
 	return nil
 }
 
+// ResolveLiveUpdate merges a full or partial live-edit target list onto
+// c.Targets, rejecting unknown or duplicate IDs, and validates the merged
+// catalog with ValidateUpdate.
+func (c Config) ResolveLiveUpdate(targets []Target) ([]Target, error) {
+	if len(targets) > len(c.Targets) {
+		return nil, CoreError("Live update contains unknown or duplicate targets")
+	}
+	seen := make(map[string]struct{}, len(targets))
+	merged := CloneTargets(c.Targets)
+	for _, target := range targets {
+		if _, dup := seen[target.ID]; dup {
+			return nil, CoreError("Duplicate target id: " + target.ID)
+		}
+		seen[target.ID] = struct{}{}
+		found := false
+		for i := range merged {
+			if merged[i].ID == target.ID {
+				merged[i] = target.Clone()
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, CoreError("Unknown target id: " + target.ID)
+		}
+	}
+	if err := c.ValidateUpdate(merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
 func (c Config) Clone() Config {
 	c.SelectedTargets = slices.Clone(c.SelectedTargets)
 	c.Targets = CloneTargets(c.Targets)

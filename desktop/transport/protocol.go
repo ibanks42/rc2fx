@@ -76,6 +76,10 @@ type CommandRefresh struct {
 type CommandLive struct {
 	Generation uint64
 	Update     core.ConfigUpdate
+	// Partial, when non-nil, holds only the targets that differ from the saved
+	// config. Sent instead of Update.Targets when connected to a compact
+	// protocol 5 mixer (0.2.5+) so slider drags only transmit changed channels.
+	Partial []core.Target
 }
 
 // CommandSettings reads RC2FX's settings file, for the installer to keep.
