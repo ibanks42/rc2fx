@@ -308,14 +308,194 @@ struct PendingTelemetry {
     meter: Meter,
     contexts: Vec<rc2fx_native_control::ContextStatus>,
 }
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn hex_fingerprint(bytes: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlimTargetMeter<'a> {
+    id: &'a str,
+    input_peak: f64,
+    output_peak: f64,
+    rms: f64,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    gain_reduction: f64,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    voice: f64,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    gate_open: f64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    clipped: u64,
+    #[serde(skip_serializing_if = "<[f64]>::is_empty")]
+    spectrum: &'a [f64],
+    callbacks: u64,
+    processed_frames: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    suppression_frames: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    missed_deadlines: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    stale_results: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    input_drops: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    output_drops: u64,
+    latency_samples: u32,
+    #[serde(skip_serializing_if = "is_false")]
+    worker_failed: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlimMeter<'a> {
+    revision: u64,
+    generation: u64,
+    synthetic: bool,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    diagnostics_epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    running_for_ns: Option<u64>,
+    targets: Vec<SlimTargetMeter<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlimTargetStatus<'a> {
+    id: &'a str,
+    mode: rc2fx_native_control::PathMode,
+    runtime_epoch: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    retired_worker_count: u64,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    retired_workers: &'a [rc2fx_native_control::RetiredWorker],
+    published: u64,
+    seen: u64,
+    applied: u64,
+    fingerprint: String,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    dropped_windows: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker: Option<&'a rc2fx_native_control::WorkerMeter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    misses: Option<&'a rc2fx_native_control::NativeHistory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lates: Option<&'a rc2fx_native_control::NativeHistory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_recent_max_ns: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlimContextStatus<'a> {
+    context: u64,
+    targets: Vec<SlimTargetStatus<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing: Option<&'a rc2fx_native_control::CallbackTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recent_callback_wall_ns: Option<u64>,
+    counters: rc2fx_native_control::EngineCounters,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Telemetry<'a> {
     at: Stamp,
     source: &'static str,
-    meter: &'a Meter,
+    meter: SlimMeter<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    native_diagnostics: Option<&'a [rc2fx_native_control::ContextStatus]>,
+    native_diagnostics: Option<Vec<SlimContextStatus<'a>>>,
+}
+
+impl<'a> Telemetry<'a> {
+    fn from_native(
+        at: Stamp,
+        meter: &'a Meter,
+        contexts: &'a [rc2fx_native_control::ContextStatus],
+    ) -> Self {
+        let slim_meter = SlimMeter {
+            revision: meter.revision,
+            generation: meter.generation,
+            synthetic: meter.synthetic,
+            diagnostics_epoch: meter.diagnostics_epoch,
+            running_for_ns: meter.running_for_ns,
+            targets: meter
+                .targets
+                .iter()
+                .map(|t| SlimTargetMeter {
+                    id: &t.id,
+                    input_peak: t.input_peak,
+                    output_peak: t.output_peak,
+                    rms: t.rms,
+                    gain_reduction: t.gain_reduction,
+                    voice: t.voice,
+                    gate_open: t.gate_open,
+                    clipped: t.clipped,
+                    spectrum: &t.spectrum,
+                    callbacks: t.callbacks,
+                    processed_frames: t.processed_frames,
+                    suppression_frames: t.suppression_frames,
+                    missed_deadlines: t.missed_deadlines,
+                    stale_results: t.stale_results,
+                    input_drops: t.input_drops,
+                    output_drops: t.output_drops,
+                    latency_samples: t.latency_samples,
+                    worker_failed: t.worker_failed,
+                })
+                .collect(),
+        };
+        let slim_contexts = contexts
+            .iter()
+            .map(|ctx| SlimContextStatus {
+                context: ctx.context,
+                timing: ctx.timing.as_ref(),
+                recent_callback_wall_ns: ctx.recent_callback_wall_ns,
+                counters: ctx.counters,
+                targets: ctx
+                    .targets
+                    .iter()
+                    .map(|t| SlimTargetStatus {
+                        id: &t.id,
+                        mode: t.mode,
+                        runtime_epoch: t.runtime_epoch,
+                        retired_worker_count: t.retired_worker_count,
+                        retired_workers: &t.retired_workers,
+                        published: t.published,
+                        seen: t.seen,
+                        applied: t.applied,
+                        fingerprint: hex_fingerprint(&t.fingerprint),
+                        dropped_windows: t.meter.map_or(0, |m| m.dropped_windows),
+                        worker: t.worker.as_ref(),
+                        misses: t.misses.as_ref().filter(|h| h.total > 0),
+                        lates: t.lates.as_ref().filter(|h| h.total > 0),
+                        worker_recent_max_ns: t.worker_recent_max_ns,
+                    })
+                    .collect(),
+            })
+            .collect();
+        Self {
+            at,
+            source: "native-mixer",
+            meter: slim_meter,
+            native_diagnostics: Some(slim_contexts),
+        }
+    }
 }
 impl From<&TargetMeter> for Counters {
     fn from(t: &TargetMeter) -> Self {
@@ -364,11 +544,11 @@ impl Counters {
         }
         v
     }
-    /// Per-target fault counters. Native xruns are engine-wide and are kept
-    /// with their timing by `capture_native_faults`; repeating them for every
-    /// target would crowd that evidence out of the bounded event history
-    /// during a burst.
-    fn faults(&self) -> [u64; 10] {
+    /// Per-target fault counters. Engine-wide xruns and callback overruns/clock
+    /// errors are kept with their timing by `capture_native_faults`; repeating
+    /// them for every target would crowd that evidence out of the bounded event
+    /// history during a burst.
+    fn faults(&self) -> [u64; 8] {
         let mut v = [
             self.missed_deadlines,
             self.stale_results,
@@ -378,13 +558,9 @@ impl Counters {
             0,
             0,
             0,
-            0,
-            0,
         ];
         if let Some(p) = &self.performance {
             v[4..].copy_from_slice(&[
-                p.callback.overruns,
-                p.callback.clock_errors,
                 p.worker_wall.overruns,
                 p.worker_wall.clock_errors,
                 p.worker_cpu.overruns,
@@ -433,7 +609,7 @@ pub(crate) struct History {
     epoch: Option<(u64, u64)>,
     retention: Retention,
     native_retirements: Vec<(String, u64)>,
-    native_fault_counters: Vec<(u64, u64, rc2fx_native_control::EngineCounters)>,
+    native_fault_counters: Vec<(u64, u64, rc2fx_native_control::EngineCounters, u64, u64)>,
 }
 impl Default for History {
     fn default() -> Self {
@@ -666,21 +842,28 @@ impl History {
             let previous = self
                 .native_fault_counters
                 .iter()
-                .find(|(generation, id, _)| {
+                .find(|(generation, id, _, _, _)| {
                     *generation == meter.generation && *id == context.context
                 })
-                .map(|(_, _, counters)| *counters);
-            let old = previous.unwrap_or_default();
+                .map(|(_, _, counters, overruns, clock_errors)| {
+                    (*counters, *overruns, *clock_errors)
+                });
+            let (old, old_overruns, old_clock_errors) =
+                previous.unwrap_or((EngineCounters::default(), 0, 0));
             let now = context.counters;
+            let now_overruns = context.timing.map_or(0, |t| t.callback_wall.overruns);
+            let now_clock_errors = context.timing.map_or(0, |t| t.callback_wall.clock_errors);
             if now.xruns > old.xruns
                 || now.helper_late > old.helper_late
                 || now.helper_stalls > old.helper_stalls
+                || now_overruns > old_overruns
+                || now_clock_errors > old_clock_errors
             {
                 self.push(false, encoded(&Fault {
                     at: self.stamp(Instant::now()), kind: "native-engine-fault",
                     scope: "observation time; cumulative engine counters are shared across contexts, not additive; null previousCounters means no baseline; clocks independently sampled",
                     generation: meter.generation, revision: meter.revision, context: context.context,
-                    previous_counters: previous, counters: now, timing: &context.timing, events: &context.events,
+                    previous_counters: previous.map(|(c, _, _)| c), counters: now, timing: &context.timing, events: &context.events,
                     workers: context.targets.iter().filter_map(|target| target.worker.as_ref().map(|worker| Worker {
                         id: &target.id, runtime_epoch: target.runtime_epoch, worker,
                     })).collect(),
@@ -690,7 +873,15 @@ impl History {
         // Keep only the currently observed contexts, not an unbounded lifetime list.
         self.native_fault_counters = contexts
             .iter()
-            .map(|c| (meter.generation, c.context, c.counters))
+            .map(|c| {
+                (
+                    meter.generation,
+                    c.context,
+                    c.counters,
+                    c.timing.map_or(0, |t| t.callback_wall.overruns),
+                    c.timing.map_or(0, |t| t.callback_wall.clock_errors),
+                )
+            })
             .collect();
     }
     fn accept_meter(&mut self, meter: &Meter) -> bool {
@@ -850,12 +1041,7 @@ impl History {
                 self.retention.native_windows_serialized =
                     self.retention.native_windows_serialized.saturating_add(1);
                 let bytes = encoded(
-                    &Telemetry {
-                        at,
-                        source: "native-mixer",
-                        meter: &meter,
-                        native_diagnostics: Some(&contexts),
-                    },
+                    &Telemetry::from_native(at, &meter, &contexts),
                     MAX_NATIVE_TELEMETRY_BYTES,
                 );
                 if let Ok(value) = &bytes {

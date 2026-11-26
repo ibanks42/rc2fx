@@ -222,6 +222,57 @@ fn full_native_catalog_retains_timing_with_bounded_history() {
     assert_eq!(history.retention.rejected_records, 0);
     assert!(history.bytes <= MAX_HISTORY_BYTES);
     assert!(serde_json::to_vec(&exported).unwrap().len() <= MAX_RESPONSE_BYTES);
+    // Slimmed samples keep 29 targets well under 15 KB per sample with hex
+    // fingerprints and no repeated engine-wide performance block on meter targets.
+    assert!(
+        samples.len() >= 10,
+        "all 10 samples should fit in MAX_HISTORY_BYTES, got {}",
+        samples.len()
+    );
+    let fp = samples[0]["telemetry"]["nativeDiagnostics"][0]["targets"][0]["fingerprint"]
+        .as_str()
+        .expect("hex fingerprint string");
+    assert_eq!(fp, "07".repeat(32));
+    assert!(
+        samples[0]["telemetry"]["meter"]["targets"][0]
+            .get("performance")
+            .is_none()
+    );
+    assert!(
+        samples[0]["telemetry"]["nativeDiagnostics"][0]
+            .get("events")
+            .is_none()
+    );
+}
+
+#[test]
+fn engine_wide_callback_overruns_emit_one_engine_fault_not_per_target_spam() {
+    let mut history = History::new(Instant::now());
+    history.state(&state(9, 12));
+    let (mut value, mut native) = native_payload(100);
+    let mut perf = meter(9, 12, 100).targets[0].performance.clone().unwrap();
+    perf.callback.overruns = 1;
+    for target in &mut value.targets {
+        target.performance = Some(perf.clone());
+    }
+    native[0].timing.as_mut().unwrap().callback_wall.overruns = 1;
+    history.native_meter(value, native);
+    let exported = report(&history);
+    let events = exported["events"].as_array().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["kind"] == "native-engine-fault")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["kind"] == "initial-fault-counters")
+            .count(),
+        0
+    );
 }
 
 /// The largest state the controller admits (a full catalog, five selected

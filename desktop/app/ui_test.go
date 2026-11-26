@@ -76,3 +76,17 @@ func TestSpinnerStepAvoidsEightSpokeAliasing(t *testing.T) {
 		t.Fatalf("spinnerAngle(spinnerFramesPerTurn) = %v, want 0", full)
 	}
 }
+
+func TestPrettyReportKeepsScalarArraysInline(t *testing.T) {
+	raw := []byte(`{"a":{"histogram":[1,2,0,0,0,0,0,0],"items":[{"x":1}]}}`)
+	pretty, err := prettyReport(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pretty, `"histogram": [1, 2, 0, 0, 0, 0, 0, 0]`) {
+		t.Fatalf("expected inline histogram array:\n%s", pretty)
+	}
+	if !strings.Contains(pretty, "\"items\": [\n") {
+		t.Fatalf("expected multi-line object array:\n%s", pretty)
+	}
+}

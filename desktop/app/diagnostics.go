@@ -32,13 +32,14 @@ func (a *App) requestDiagnostics(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// prettyReport formats the raw report via core.Value to preserve the mixer's key order.
+// prettyReport formats the raw report via core.Value to preserve the mixer's
+// key order while keeping scalar arrays (such as histograms) on one line.
 func prettyReport(report json.RawMessage) (string, error) {
 	value, err := core.ParseJSONBytes(report, max(len(report), 1), math.MaxInt)
 	if err != nil {
 		return "", err
 	}
-	return value.Pretty(), nil
+	return value.PrettyCompactArrays(), nil
 }
 
 func (a *App) saveDiagnostics(cx *gk.Cx, report json.RawMessage, err error) {

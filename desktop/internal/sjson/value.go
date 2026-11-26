@@ -412,3 +412,86 @@ func (v Tree) String() string { return string(encodeTree(v, false)) }
 func (v Tree) Pretty() string {
 	return string(encodeTree(v, true))
 }
+
+// PrettyCompactArrays formats with two-space indentation while keeping arrays
+// of scalar values (numbers, strings, booleans, nulls) on a single line.
+func (v Tree) PrettyCompactArrays() string {
+	var out []byte
+	out = appendPrettyCompact(out, v, 0)
+	return string(out)
+}
+
+func isScalarArray(items []Tree) bool {
+	for _, item := range items {
+		if item.kind == KindArray || item.kind == KindObject {
+			return false
+		}
+	}
+	return true
+}
+
+func appendIndent(dst []byte, depth int) []byte {
+	for range depth {
+		dst = append(dst, ' ', ' ')
+	}
+	return dst
+}
+
+func appendPrettyCompact(dst []byte, v Tree, depth int) []byte {
+	switch v.kind {
+	case KindNull:
+		return append(dst, "null"...)
+	case KindBool:
+		if v.boolean {
+			return append(dst, "true"...)
+		}
+		return append(dst, "false"...)
+	case KindNumber:
+		return v.number.appendJSON(dst)
+	case KindString:
+		return appendJSONString(dst, v.text)
+	case KindArray:
+		if len(v.items) == 0 {
+			return append(dst, "[]"...)
+		}
+		if isScalarArray(v.items) {
+			dst = append(dst, '[')
+			for i, item := range v.items {
+				if i > 0 {
+					dst = append(dst, ", "...)
+				}
+				dst = appendPrettyCompact(dst, item, 0)
+			}
+			return append(dst, ']')
+		}
+		dst = append(dst, "[\n"...)
+		for i, item := range v.items {
+			if i > 0 {
+				dst = append(dst, ",\n"...)
+			}
+			dst = appendIndent(dst, depth+1)
+			dst = appendPrettyCompact(dst, item, depth+1)
+		}
+		dst = append(dst, '\n')
+		dst = appendIndent(dst, depth)
+		return append(dst, ']')
+	case KindObject:
+		if len(v.members) == 0 {
+			return append(dst, "{}"...)
+		}
+		dst = append(dst, "{\n"...)
+		for i, member := range v.members {
+			if i > 0 {
+				dst = append(dst, ",\n"...)
+			}
+			dst = appendIndent(dst, depth+1)
+			dst = appendJSONString(dst, member.Key)
+			dst = append(dst, ": "...)
+			dst = appendPrettyCompact(dst, member.Value, depth+1)
+		}
+		dst = append(dst, '\n')
+		dst = appendIndent(dst, depth)
+		return append(dst, '}')
+	}
+	return append(dst, "null"...)
+}
