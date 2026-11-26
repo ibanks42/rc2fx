@@ -300,7 +300,11 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 		return a.taskScreen(cx)
 	}
 	if !a.session.Connected {
-		return a.connectionScreen(cx)
+		screen := a.connectionScreen(cx)
+		if a.launchQuiet() {
+			return screen
+		}
+		return a.withUpdateToast(cx, screen)
 	}
 	target := a.target().Clone()
 	editorPage := a.nav.ChannelInFront() && a.unprocessedSource() == nil
@@ -377,5 +381,5 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	if f, ok := a.footer(); ok {
 		root = root.Child(f)
 	}
-	return root.ID("app")
+	return a.withUpdateToast(cx, root.ID("app"))
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ibanks42/goui-kit/gk"
 
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
@@ -90,6 +91,39 @@ func TestPrettyReportKeepsScalarArraysInline(t *testing.T) {
 	}
 	if !strings.Contains(pretty, "\"items\": [\n") {
 		t.Fatalf("expected multi-line object array:\n%s", pretty)
+	}
+}
+
+func TestUpdateToastPersistsUntilDismissedAndReappearsForNewerVersion(t *testing.T) {
+	a := &App{}
+	if _, ok := a.updateToastState(); ok {
+		t.Fatal("toast shown with no update")
+	}
+	a.appUpdate.Finish(appupdate.UpdateSnapshot{
+		App: &appupdate.UpdateCheck{
+			Kind:    appupdate.UpdateAvailable,
+			Version: "0.2.5",
+			URL:     appupdate.AppReleasesURL + "/tag/v0.2.5",
+		},
+	}, false)
+	if m, ok := a.updateToastState(); !ok || m.version != "0.2.5" {
+		t.Fatalf("toast not shown when update is available: %+v %v", m, ok)
+	}
+	// Dismissing hides 0.2.5 even if another background check reports 0.2.5.
+	a.appUpdate.dismissedVersion = "0.2.5"
+	if _, ok := a.updateToastState(); ok {
+		t.Fatal("toast still shown after dismiss")
+	}
+	// A newer version shows the toast again.
+	a.appUpdate.Finish(appupdate.UpdateSnapshot{
+		App: &appupdate.UpdateCheck{
+			Kind:    appupdate.UpdateAvailable,
+			Version: "0.2.6",
+			URL:     appupdate.AppReleasesURL + "/tag/v0.2.6",
+		},
+	}, false)
+	if m, ok := a.updateToastState(); !ok || m.version != "0.2.6" {
+		t.Fatalf("toast did not reappear for newer version: %+v %v", m, ok)
 	}
 }
 
