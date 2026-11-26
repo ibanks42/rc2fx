@@ -2,17 +2,17 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 1795410528,
+    "version": 1795667615,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "mixer-v0.2.4/rc2fx-mixer-0.2.4.payload": {
-        "length": 13914131,
+      "mixer-v0.3.0/rc2fx-mixer-0.3.0.payload": {
+        "length": 14380883,
         "hashes": {
-          "sha256": "8c5a05287392049726952aafd2fec24b63a2de1616ab6979cd5d78dc81021ccd"
+          "sha256": "c78cf0f4fc0c6b446e09d785dd10d8e44cf2f64eb97e272c9316dd8d65e250c8"
         },
         "custom": {
           "rc2fxMixer": {
-            "version": "0.2.4",
+            "version": "0.3.0",
             "payloadFormat": 1,
             "protocolVersion": 1,
             "minimumAppVersion": "0.1.1",
@@ -25,19 +25,19 @@
           }
         }
       },
-      "mixer-v0.2.4/THIRD-PARTY-NOTICES.html": {
-        "length": 1775408,
+      "mixer-v0.3.0/THIRD-PARTY-NOTICES.html": {
+        "length": 1775442,
         "hashes": {
-          "sha256": "6e66c0a9ac3e6ff6b9d238b152ef2f2ecd603707424eb133a898b68f4dbbbcd0"
+          "sha256": "fdaa9a68927e0651d61049fc80cc549d9fa287516a0f0dd6e50bd9d8b6455382"
         }
       },
-      "mixer-v0.2.4/firmware-profiles.json": {
+      "mixer-v0.3.0/firmware-profiles.json": {
         "length": 6698,
         "hashes": {
           "sha256": "a2e9c1c1b5234bfba8e312e4bf67577ea9f2972a213839dc5afc8dd942343082"
         },
         "custom": {
-          "rc2fxCatalog": "0.2.4"
+          "rc2fxCatalog": "0.3.0"
         }
       }
     },
@@ -49,7 +49,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "219eb339bcd9f8c73521c66de2534806dd2257bdd035a9abaaeada8f0d02a2e91efdf01e42b1fb5365c2f172de760210fe4921636856833d3e6e4bd196fdc099d3f1b116c7303957abf073fab62a9fbfa3c81aeaa349382c9e16f85e21e57423d3815ecce66045c8f24314c66964b5d064ab19eb98ffdc1716f0b92bb16a318ccd73e2fe86a81aec40583bfb585fa11b08079731a0b8e8790f30467c3a5caa4d379d8b08f6458000a7aff500b7453ecc697e46e11d731fa88ea3b98a84ee237c59fb0727c66a7ade269ca63f3a2bb2bf15ee09d8ef709175f2c2d88f79a3e0c375f515850704f824b52bb0e0cf4d705e7e86a588c09144d71c2442d61e2a5a3f2b9cbf5e6b193f7689eb2c72d0c1a08df05d46342c68e726d10049ff97f7d1668df3f8b7b06f124d9dc1325e4eee45021715edd7624504f29298632269354f350eee278b5590e16fc57000658a16c9e4b5a376186dac4e3fba62fcaaf5a90047e2d71996f73d781f2f937fb5f89010ba877324657b1746fbba4517faefe1fec6"
+      "sig": "9b1bcbbe87cc487a21c125eec69c0aa85d4234d20e8f156038b58199448895134e56a5b7f704077f4185ef69a9280527e212665070b11da7b71d040f64cc2dd2cbbd92f2f0f2d90ef2bf3fec6a95bed1130da4fde4f956fb695461069eeadd3786c93c635b1102b5a80448e1a75e227558eb8af64a6f96533d65bd445e00b35ffd66d7c1b6cae73d62fe90ada9b946a43b175c6cc3da2ea05511fbcd0c6107c2ebb4b76434aebb794b86a10279538b5293472adcc158ce6b1ce3892eef82b827e5fa5d1b5af5a7c75856f80404722c86922bf4adc725ff889939f8da8918ef7f494d1ceafa66505a6e272f717d60b9a20bc85de1f63e151b634eb9698f102ea3d91df4daef27af3638936493771b69c501debdeedfff8718f6f95dad5e943e8d1255cefc40cb5ae5369633d046f6a6d9397cad7998b4735b2aed2e5e0965bb86fe29252b3102828a3957972579b394133cd96373de17f1a7cf6bb90caaac3773f97f49840e71efbbd7090c2d2136cf2d7743c55891b2087dad2ab429b1476104"
     }
   ]
 }
