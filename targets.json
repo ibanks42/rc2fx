@@ -2,97 +2,97 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 795560777,
+    "version": 795667620,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-full.nupkg": {
-        "length": 31398834,
+      "v0.3.0/io.github.ibanks42.rc2fx-0.3.0-full.nupkg": {
+        "length": 31475858,
         "hashes": {
-          "sha256": "22aedceef8d0cd86354eddd1328f834076ee88612bf621612de7cb00e4d71289"
+          "sha256": "d04952319d3805749ff4a76e677b878598ac7c7b111a05dd25bb223903ee28e9"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-linux-full.nupkg": {
-        "length": 55086727,
+      "v0.3.0/io.github.ibanks42.rc2fx-0.3.0-linux-full.nupkg": {
+        "length": 55120550,
         "hashes": {
-          "sha256": "78fbde87db79a18d2a8dd66ad572dd17e3129f9a2fee55f4ee9fc7eaa775293b"
+          "sha256": "a2265eb99879a0d0084be5aadf170217f342bc0be41191c13a38eff495540e18"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-osx-full.nupkg": {
-        "length": 47047715,
+      "v0.3.0/io.github.ibanks42.rc2fx-0.3.0-osx-full.nupkg": {
+        "length": 47188794,
         "hashes": {
-          "sha256": "89d3433f804e7c2f66fb651b943e669c5f0ae0c115b72a872d687c11d1f3129b"
+          "sha256": "8f64c469f988f58ef65ea730bc725ff0f3718267d05b4c69cd80f9c694033909"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/rc2fx-0.2.4-appimage-runtime-sources.tar.gz": {
+      "v0.3.0/rc2fx-0.3.0-appimage-runtime-sources.tar.gz": {
         "length": 10922294,
         "hashes": {
           "sha256": "eb8c6e9673d744e3eb6277af416211d4786dbe7b8aae5efeea7bbf2381c320fc"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/rc2fx-linux-x64.AppImage": {
-        "length": 55740920,
+      "v0.3.0/rc2fx-linux-x64.AppImage": {
+        "length": 55773688,
         "hashes": {
-          "sha256": "18a61ef30f405477bee2389e168742240002f40943b85c639e51c69386bf59fa"
+          "sha256": "412fab6f59e556faa89305949ea990f9344cb1d1aa4e88c17d7f0985b625805f"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/rc2fx-macos-universal.pkg": {
-        "length": 45475871,
+      "v0.3.0/rc2fx-macos-universal.pkg": {
+        "length": 45621811,
         "hashes": {
-          "sha256": "9e933f8d03d88e36bea65b2fcd35f900b558fde09b859d03f1835d4843ebd65a"
+          "sha256": "86e44e885986d4f9d18a6ce51d771443c52ef8a0dcdefd323849d29974768abb"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/rc2fx-windows-x64-setup.exe": {
-        "length": 39881138,
+      "v0.3.0/rc2fx-windows-x64-setup.exe": {
+        "length": 39958162,
         "hashes": {
-          "sha256": "cf286f8e6b84dabc3fa0008d860d7b60746b4389806dc834fb5c33b672606451"
+          "sha256": "279302c3764385ea3221419222a07559360d0a6ebcb193873f3b6efd3bf7135b"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/releases.linux.json": {
+      "v0.3.0/releases.linux.json": {
         "length": 288,
         "hashes": {
-          "sha256": "c7de7435edc9d19fd7e8e2ba1595951b4fcd7d2d541442b50c37df1456e0267d"
+          "sha256": "220f6fc19b56add15330b6264774936bd60f029685fa610c1c582ccc423c2e2b"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/releases.osx.json": {
+      "v0.3.0/releases.osx.json": {
         "length": 286,
         "hashes": {
-          "sha256": "c32221458937e53719af8d96f8faeea9bc1bbdfce04892c30201e18a63deb7dc"
+          "sha256": "7a1e4a3cbfbbddb4f805f979f1fcd97d2335804ab0fb8bc6ccf21a0408dc978d"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       },
-      "v0.2.4/releases.win.json": {
+      "v0.3.0/releases.win.json": {
         "length": 282,
         "hashes": {
-          "sha256": "5ae5e2295763fc0b7e252390577faa2126d7afed38f42acf0951d53359addba3"
+          "sha256": "c276cf1dfc76e11ebe287a5565e2a2c2ca14e02d069e947ebcce72d19d90cfee"
         },
         "custom": {
-          "version": "0.2.4"
+          "version": "0.3.0"
         }
       }
     },
@@ -104,7 +104,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "bd185e565423ecd77145625e9d251a3e88912af54f088009603839c752ba3d53e2332150d5acb895fdbce329c29e48bc566bc0f0dd33bc34a53f30fe5d31bfdf78140af6ca31d2fb3a741ed5dda3b2897cd1092f7406446e6d13f331abb3cae44b5b1428c19b71fa221557fb641281bd7bb7a45efb760b2cd0764125a52f8361c68648508789a74b58b7cc5de02175d6dc6319a6fa2c051c869d7f503916618140cdeaff87555add6fafde93e7950bc592708f1962772b447e43b623e1d53b03e6bdf806f18edb81ce5bbbec205d0a92c7a87d64f5520740d8e2f939b0e456bf7308377664aa228861c0172a07f725de33819aded7ad2625b3d8abe4c8f09580002e26b9d07eafdce1b08783cb7fb183caa2c79faba7bf66ec0e1d10edb815729b1b0f53821561356df3d82f84007f151b00b2ffe881029f6bbc101820f6e0049db40bef3ad8e48eb48b33bbaca240fbf2bdcaf691faed03bfd5aa447efb649550b2dad106fa1dca05ea28ea49761897528401f25a3b320099440d02149fdcad"
+      "sig": "909c3f0041369e9d440cce7221c736c8aadafacbc08f0eeafac02c4c077e3abcce63c0d8ab81c6aca0881caffe17513f4b4163f6b5ad46d2d18e11d008891669bb75ba67062bb741841d49949871742ff1fcca4b9e3af080a7b4dacbe38b7d155c122b617d75295a9ab2343ee3e9416a3071a597a14e98154a7699e8b8a5c62cc7e69d7599234297ca36c50adcfa0157015da670984fcac8629e41d6c029d8683281f03b09d2a0e1b9768c3a25c0f165d83d490dd2e3a34c47e07b538bd25ce1b62691a5e47d9513bc8c2f2b70befc8acb67ceac7532a6b54abaf927dd958feb9414eec067f57e442a79ea03b217d28abcbec205435adbdf8662ea513c925f226950480bf260eee34a3fcf0d7486dba9361c84d64a8eaa1fac22881298b25780cb8817cdab1dd1a3456dbf1d164cdd36850e7ca7810c2c1c12a92d6c4024a301284d4379abd30b97b983c8e09994d8e2c3a273577ebc6f97c2f36dc4b5be90d9de3703b90758ac0b13077bd8dea818291e174382282bad3b700664b9562aa604"
     }
   ]
 }
