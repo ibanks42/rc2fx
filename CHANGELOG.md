@@ -2,6 +2,21 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.3.0] - 2026-11-26
+
+### Features
+
+- *(desktop)* Show persistent update toast with action button
+
+### Bug fixes
+
+- *(usb)* Add compact protocol 5 on reports 64/65 with zstd
+
+### Performance
+
+- *(diagnostics)* Slim history snapshots and format scalar arrays inline
+- *(live)* Send only changed targets on protocol 5 live updates
+
 ## [0.2.4] - 2026-11-24
 
 ### Documentation
