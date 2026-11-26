@@ -12,6 +12,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
 func TestWindowsMatchThePackagedDesktopIdentity(t *testing.T) {
@@ -124,6 +125,82 @@ func TestUpdateToastPersistsUntilDismissedAndReappearsForNewerVersion(t *testing
 	}, false)
 	if m, ok := a.updateToastState(); !ok || m.version != "0.2.6" {
 		t.Fatalf("toast did not reappear for newer version: %+v %v", m, ok)
+	}
+}
+
+func TestMixerUpdateToastCoversInPlaceFlashAndDismiss(t *testing.T) {
+	// Disconnected mixer shows no toast.
+	a := connectedTo("0.2.4", 1, signedOffer("0.3.0", "0.0.1", testProfile))
+	a.session.Connected = false
+	if _, ok := a.mixerUpdateToastState(); ok {
+		t.Fatal("toast shown while disconnected")
+	}
+
+	// Connected mixer with newer compatible signed offer shows in-place toast.
+	a.session.Connected = true
+	m, ok := a.mixerUpdateToastState()
+	if !ok || !m.inPlace || m.version != "0.3.0" || m.title != "Mixer software 0.3.0 is available" {
+		t.Fatalf("in-place toast = %+v, %v", m, ok)
+	}
+
+	// Dismissing hides 0.3.0 until a newer mixer version appears.
+	a.appUpdate.dismissedMixerUpdate = m.dismissKey
+	if _, ok := a.mixerUpdateToastState(); ok {
+		t.Fatal("toast still shown after dismiss")
+	}
+	a.appUpdate.SetSigned([]installer.MixerOffer{
+		signedOffer("0.3.0", "0.0.1", testProfile),
+		signedOffer("0.3.1", "0.0.1", testProfile),
+	})
+	if m2, ok := a.mixerUpdateToastState(); !ok || m2.version != "0.3.1" || !m2.inPlace {
+		t.Fatalf("toast did not reappear for 0.3.1: %+v, %v", m2, ok)
+	}
+
+	// Partial native mismatch already shows the inline notice, so toast stays hidden.
+	nativeProto := uint32(1)
+	a.deviceVersions.NativeProtocol = &nativeProto
+	if _, ok := a.mixerUpdateToastState(); ok {
+		t.Fatal("toast shown alongside mixerUpdateNotice")
+	}
+	a.deviceVersions.NativeProtocol = nil
+
+	// Offers requiring a newer desktop app do not trigger a mixer update toast.
+	needsNewerApp := connectedTo("0.2.4", 1, signedOffer("0.4.0", "99.0.0", testProfile))
+	if _, ok := needsNewerApp.mixerUpdateToastState(); ok {
+		t.Fatal("toast shown for offer requiring a newer app")
+	}
+
+	// Bundled mixer update without in-place support shows a flash toast.
+	proto := uint32(core.MixerProtocolVersion)
+	fw := "1.7.7"
+	oldRuntime := "0.2.4"
+	bundled := "0.3.0"
+	flashApp := connectedTo(oldRuntime, 0)
+	m, ok = flashApp.flashMixerUpdateToastState(&oldRuntime, &bundled, &fw, &fw, &proto)
+	if !ok || m.inPlace || m.version != "0.3.0" {
+		t.Fatalf("flash toast = %+v, %v", m, ok)
+	}
+	flashApp.appUpdate.dismissedMixerUpdate = m.dismissKey
+	if _, ok := flashApp.flashMixerUpdateToastState(&oldRuntime, &bundled, &fw, &fw, &proto); ok {
+		t.Fatal("flash toast still shown after dismiss")
+	}
+
+	// Mixer supporting in-place waits while initial signed check is still running.
+	waiting := connectedTo(oldRuntime, 1)
+	waiting.bundledMixerSoftware = &bundled
+	waiting.deviceVersions.Firmware = &fw
+	waiting.deviceVersions.Protocol = &proto
+	waiting.appUpdate = AppUpdate{signedChecking: true}
+	if _, ok := waiting.mixerUpdateToastState(); ok {
+		t.Fatal("flash fallback toast shown while signed check is still in flight")
+	}
+
+	// Combined mixer + RØDE firmware flash update mentions both.
+	oldFW := "1.6.0"
+	bothApp := connectedTo(oldRuntime, 0)
+	m, ok = bothApp.flashMixerUpdateToastState(&oldRuntime, &bundled, &oldFW, &fw, &proto)
+	if !ok || m.inPlace || m.version != "0.3.0" || !strings.Contains(m.detail, "1.7.7") {
+		t.Fatalf("combined flash toast = %+v, %v", m, ok)
 	}
 }
 

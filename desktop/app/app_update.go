@@ -19,11 +19,13 @@ import (
 )
 
 // AppUpdate tracks the latest update check along with the changes dialog state
-// and whether the user dismissed the persistent update toast for a version.
+// and which app or mixer update toasts the user dismissed.
 type AppUpdate struct {
 	updates.AppUpdate
-	changes          changesDialog
-	dismissedVersion string
+	changes              changesDialog
+	dismissedVersion     string
+	dismissedMixerUpdate string
+	signedChecking       bool
 }
 
 // link returns an external-link ghost button if updates.SafeURL permits url.
@@ -48,8 +50,10 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 	}
 	if manual {
 		a.appUpdate.dismissedVersion = ""
+		a.appUpdate.dismissedMixerUpdate = ""
 	}
 	a.appUpdate.Checking = true
+	a.appUpdate.signedChecking = true
 	a.notify(cx)
 	gk.Go(cx, func() appupdate.UpdateSnapshot { return appupdate.CheckForUpdates(model.AppVersion) },
 		func(cx *gk.Cx, result appupdate.UpdateSnapshot) {
@@ -80,21 +84,56 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 		}
 		return nil
 	}, func(cx *gk.Cx, signed *[]installer.MixerOffer) {
+		a.appUpdate.signedChecking = false
 		if signed != nil {
 			a.appUpdate.SetSigned(*signed)
-			a.notify(cx)
-		} else {
-			gk.Quiet(cx)
 		}
+		a.notify(cx)
 	})
 }
 
 func (a *App) withUpdateToast(cx *gk.Cx, screen gk.Element) gk.Element {
-	toast, ok := a.updateToast(cx)
-	if !ok {
+	var toasts []gk.Element
+	if toast, ok := a.updateToast(cx); ok {
+		toasts = append(toasts, toast)
+	}
+	if toast, ok := a.mixerUpdateToast(cx); ok {
+		toasts = append(toasts, toast)
+	}
+	if len(toasts) == 0 {
 		return screen
 	}
-	return gk.Div(s.Relative, s.SizeFull).Child(screen).Child(toast)
+	stack := gk.VFlex(s.Absolute, s.ItemsEnd).
+		Bottom(px(20)).Right(px(20)).Gap(px(10)).
+		Children(toasts...).
+		ID("update-toasts")
+	return gk.Div(s.Relative, s.SizeFull).Child(screen).Child(stack)
+}
+
+func updateToastCard(id gk.ID, title, detail string, action kit.ButtonEl, dismissID gk.ID, onDismiss func(*gk.Cx)) gk.Element {
+	copyCol := gk.VFlex(s.Flex1, s.MinW0).Gap(px(2)).
+		Child(gk.Div(s.FontSemibold, s.TextSm).TextColor(rgb(Text)).Child(txt(title)))
+	if detail != "" {
+		copyCol = copyCol.Child(gk.Div(s.TextXs).LineHeight(gk.Relative(1.35)).TextColor(rgb(Muted)).Child(txt(detail)))
+	}
+
+	controls := gk.HFlex(s.ItemsCenter, s.FlexShrink0).Gap(px(6)).
+		Child(action.H(px(30)).Px(px(12)).Rounded(float32(15)).FontSemibold())
+	if onDismiss != nil {
+		controls = controls.Child(kit.Button(dismissID).Ghost().Small().Icon(gk.IconClose).
+			Tooltip("Dismiss").
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { onDismiss(cx) }))
+	}
+
+	return gk.HFlex(s.ItemsCenter, s.Border1, s.ShadowLg).
+		MaxW(px(400)).Gap(px(12)).
+		Px(px(14)).Py(px(11)).Rounded(px(14)).
+		Bg(rgb(surface().Panel)).BorderColor(rgb(surface().LineStrong)).
+		FontFamily("Inter").TextColor(rgb(Text)).
+		Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(Accent))).
+		Child(copyCol).
+		Child(controls).
+		ID(id)
 }
 
 type updateToastModel struct {
@@ -203,32 +242,126 @@ func (a *App) updateToast(cx *gk.Cx) (gk.Element, bool) {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { gk.OpenURL(cx, releaseURL) })
 	}
 
-	copyCol := gk.VFlex(s.Flex1, s.MinW0).Gap(px(2)).
-		Child(gk.Div(s.FontSemibold, s.TextSm).TextColor(rgb(Text)).Child(txt(title)))
-	if detail != "" {
-		copyCol = copyCol.Child(gk.Div(s.TextXs).LineHeight(gk.Relative(1.35)).TextColor(rgb(Muted)).Child(txt(detail)))
-	}
-
-	controls := gk.HFlex(s.ItemsCenter, s.FlexShrink0).Gap(px(6)).
-		Child(action.H(px(30)).Px(px(12)).Rounded(float32(15)).FontSemibold())
+	var onDismiss func(*gk.Cx)
 	if canDismiss {
 		dismissVersion := version
-		controls = controls.Child(kit.Button("update-toast-dismiss").Ghost().Small().Icon(gk.IconClose).
-			Tooltip("Dismiss").
-			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-				a.appUpdate.dismissedVersion = dismissVersion
-				a.notify(cx)
-			}))
+		onDismiss = func(cx *gk.Cx) {
+			a.appUpdate.dismissedVersion = dismissVersion
+			a.notify(cx)
+		}
+	}
+	return updateToastCard("update-toast", title, detail, action, "update-toast-dismiss", onDismiss), true
+}
+
+type mixerUpdateToastModel struct {
+	version    string
+	dismissKey string
+	title      string
+	detail     string
+	inPlace    bool
+}
+
+func (a *App) mixerUpdateToastState() (mixerUpdateToastModel, bool) {
+	if !a.session.Connected || a.deviceVersions == nil || a.installer != nil {
+		return mixerUpdateToastModel{}, false
+	}
+	// mixerUpdateNotice already displays an inline update card on every connected
+	// page when a partial native protocol mismatch is present.
+	if a.deviceVersions.NativeProtocol != nil {
+		return mixerUpdateToastModel{}, false
+	}
+	if model.CompatibilityOf(a.deviceVersions.Protocol) == model.CompatibilityMixerNewer {
+		return mixerUpdateToastModel{}, false
 	}
 
-	toast := gk.HFlex(s.Absolute, s.ItemsCenter, s.Border1, s.ShadowLg).
-		Bottom(px(20)).Right(px(20)).MaxW(px(400)).Gap(px(12)).
-		Px(px(14)).Py(px(11)).Rounded(px(14)).
-		Bg(rgb(surface().Panel)).BorderColor(rgb(surface().LineStrong)).
-		FontFamily("Inter").TextColor(rgb(Text)).
-		Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(Accent))).
-		Child(copyCol).
-		Child(controls).
-		ID("update-toast")
-	return toast, true
+	if direct, ok := a.directInPlaceOffer(); ok {
+		version := direct.offer.Metadata.Version
+		dismissKey := "mixer:" + version
+		if a.appUpdate.dismissedMixerUpdate == dismissKey {
+			return mixerUpdateToastModel{}, false
+		}
+		return mixerUpdateToastModel{
+			version:    version,
+			dismissKey: dismissKey,
+			title:      fmt.Sprintf("Mixer software %s is available", version),
+			detail:     "No flash needed · brief audio pause",
+			inPlace:    true,
+		}, true
+	}
+
+	// Wait for the initial signed-offer fetch to finish before falling back to a
+	// flash toast on mixers that support in-place updates.
+	if _, signedKnown := a.appUpdate.Signed(); !signedKnown && a.appUpdate.signedChecking &&
+		a.deviceVersions.InPlaceUpdates != nil && *a.deviceVersions.InPlaceUpdates > 0 {
+		return mixerUpdateToastModel{}, false
+	}
+
+	runtime, firmware, newestFirmware := a.versionInputs()
+	available := a.availableMixerSoftware()
+	return a.flashMixerUpdateToastState(runtime, available, firmware, newestFirmware, a.deviceVersions.Protocol)
+}
+
+func (a *App) flashMixerUpdateToastState(runtime, available, firmware, newestFirmware *string, protocol *uint32) (mixerUpdateToastModel, bool) {
+	summary := model.Summarize(&model.Inputs{
+		InstalledRuntime:        runtime,
+		AvailableRuntime:        available,
+		InstalledFirmware:       firmware,
+		NewestSupportedFirmware: newestFirmware,
+		DeviceProtocol:          protocol,
+	})
+	if !summary.UpdateAvailable() {
+		return mixerUpdateToastModel{}, false
+	}
+	if summary.Runtime != model.StandingUpdateAvailable && summary.Compatibility != model.CompatibilityMixerOlder {
+		return mixerUpdateToastModel{}, false
+	}
+
+	version := ""
+	if available != nil {
+		version = *available
+	}
+	title := "Mixer update available"
+	if version != "" {
+		title = fmt.Sprintf("Mixer software %s is available", version)
+	}
+	detail := "Flashes the mixer and restarts."
+	dismissKey := "mixer:" + version
+	if version == "" {
+		dismissKey = "mixer:older"
+	}
+	if summary.Firmware == model.StandingUpdateAvailable && newestFirmware != nil {
+		detail = fmt.Sprintf("Includes RØDE firmware %s · flashes mixer", *newestFirmware)
+		dismissKey += "+fw:" + *newestFirmware
+	}
+
+	if dismissKey != "" && a.appUpdate.dismissedMixerUpdate == dismissKey {
+		return mixerUpdateToastModel{}, false
+	}
+	return mixerUpdateToastModel{
+		version:    version,
+		dismissKey: dismissKey,
+		title:      title,
+		detail:     detail,
+	}, true
+}
+
+// mixerUpdateToast builds the persistent floating mixer-update toast with a
+// direct Update button that opens the in-place updater or guided flash task.
+func (a *App) mixerUpdateToast(cx *gk.Cx) (gk.Element, bool) {
+	m, ok := a.mixerUpdateToastState()
+	if !ok {
+		return nil, false
+	}
+	open := func(cx *gk.Cx) { a.openTask(cx, taskUpdate) }
+	if m.inPlace {
+		open = a.openInPlaceUpdate
+	}
+	action := kit.Button("mixer-update-toast-action").Primary().Small().Icon(gk.IconArrowDown).
+		Label("Update").
+		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { open(cx) })
+	dismissKey := m.dismissKey
+	return updateToastCard("mixer-update-toast", m.title, m.detail, action, "mixer-update-toast-dismiss", func(cx *gk.Cx) {
+		a.appUpdate.dismissedMixerUpdate = dismissKey
+		a.notify(cx)
+	}), true
 }
